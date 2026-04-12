@@ -23,11 +23,14 @@ export async function extractCoreInfo(page, log) {
         website: null,
         googleMapsUrl: null,
         menuUrl: null,
-        orderUrls: [],
+        orderProviders: [],
         appointmentUrl: null,
         priceLevel: null,
+        openingDate: null,
         temporarilyClosed: false,
         permanentlyClosed: false,
+        wheelchairAccessible: null,
+        knowledgePanelSummary: null,
     };
 
     try {
@@ -40,13 +43,29 @@ export async function extractCoreInfo(page, log) {
         // Primary category
         result.primaryCategory = await resolveSelectorText(page, SELECTORS.placeDetail.primaryCategory, { log });
 
-        // Additional categories
+        // Additional/secondary categories — try multiple strategies
         const catEls = await resolveSelectorAll(page, SELECTORS.placeDetail.additionalCategories, { log });
         if (catEls.length > 0) {
             result.additionalCategories = await Promise.all(
                 catEls.map((el) => el.evaluate((e) => e.textContent?.trim() || null)),
             );
             result.additionalCategories = result.additionalCategories.filter(Boolean);
+        }
+        // Fallback: extract all category-like buttons near the business name area
+        if (result.additionalCategories.length === 0) {
+            const allCats = await page.evaluate(() => {
+                const cats = [];
+                // Google sometimes lists categories as clickable buttons/spans near the name
+                const els = document.querySelectorAll('button[jsaction*="category"], .DkEaL, .LrzXr button, .skqShb button');
+                els.forEach((el, i) => {
+                    if (i > 0) { // skip first (primary)
+                        const t = el.textContent?.trim();
+                        if (t) cats.push(t);
+                    }
+                });
+                return cats;
+            });
+            if (allCats.length > 0) result.additionalCategories = allCats;
         }
 
         // Address — extract text from button
@@ -81,13 +100,24 @@ export async function extractCoreInfo(page, log) {
             result.menuUrl = await menuEl.evaluate((el) => el.href || null);
         }
 
-        // Order URLs
+        // Order providers with names and URLs
         const orderEls = await resolveSelectorAll(page, SELECTORS.placeDetail.orderUrl, { log });
         if (orderEls.length > 0) {
-            result.orderUrls = await Promise.all(
-                orderEls.map((el) => el.evaluate((e) => e.href || null)),
+            result.orderProviders = await Promise.all(
+                orderEls.map((el) => el.evaluate((e) => {
+                    const url = e.href || null;
+                    // Extract provider name from aria-label, text, or URL domain
+                    let name = e.getAttribute('aria-label') || e.textContent?.trim() || null;
+                    if (!name && url) {
+                        try {
+                            const domain = new URL(url).hostname.replace('www.', '').split('.')[0];
+                            name = domain.charAt(0).toUpperCase() + domain.slice(1);
+                        } catch { /* skip */ }
+                    }
+                    return { provider: name, url };
+                })),
             );
-            result.orderUrls = result.orderUrls.filter(Boolean);
+            result.orderProviders = result.orderProviders.filter((p) => p.url);
         }
 
         // Appointment URL
@@ -134,14 +164,36 @@ export async function extractCoreInfo(page, log) {
             });
         }
 
-        // CID from URL
+        // CID from URL and page source
         const cidMatch = url.match(/ludocid=(\d+)/);
         if (cidMatch) {
             result.cid = cidMatch[1];
-        } else {
-            const cid2 = url.match(/!1s(0x[a-f0-9]+:0x[a-f0-9]+)/);
-            if (cid2) result.cid = cid2[1];
         }
+        // Try extracting CID from page HTML (Google embeds it in script tags and data attributes)
+        if (!result.cid) {
+            result.cid = await page.evaluate(() => {
+                // Check for data-cid attribute
+                const cidEl = document.querySelector('[data-cid]');
+                if (cidEl) return cidEl.getAttribute('data-cid');
+                // Check in page source for ludocid pattern
+                const html = document.documentElement.innerHTML;
+                const match = html.match(/ludocid[\\"]?[:=][\\"]?(\d{10,})/);
+                if (match) return match[1];
+                // Check for CID in JSON-LD or embedded data
+                const match2 = html.match(/"cid"[:\s]*"?(\d{10,})"?/);
+                if (match2) return match2[1];
+                return null;
+            });
+        }
+
+        // Opening date
+        const openingText = await resolveSelectorText(page, SELECTORS.placeDetail.openingDate, { log });
+        if (openingText) {
+            result.openingDate = openingText.replace(/Opened?\s*/i, '').trim();
+        }
+
+        // Knowledge panel summary
+        result.knowledgePanelSummary = await resolveSelectorText(page, SELECTORS.placeDetail.knowledgePanelSummary, { log });
 
         // Temporarily closed
         const { element: tempClosed } = await resolveSelector(page, SELECTORS.placeDetail.temporarilyClosed);
@@ -150,6 +202,24 @@ export async function extractCoreInfo(page, log) {
         // Permanently closed
         const { element: permClosed } = await resolveSelector(page, SELECTORS.placeDetail.permanentlyClosed);
         result.permanentlyClosed = !!permClosed;
+
+        // Wheelchair accessible — check aria-label and attribute chips
+        result.wheelchairAccessible = await page.evaluate(() => {
+            // Check in accessibility attributes
+            const chips = document.querySelectorAll('.CK16pd, .Ufn4mc, li.hpLkke');
+            for (const chip of chips) {
+                const text = (chip.textContent || '').toLowerCase();
+                if (text.includes('wheelchair') && text.includes('accessible')) {
+                    // Check if it's not crossed out
+                    const isCrossed = chip.classList.contains('hgKrVf') || chip.querySelector('.hgKrVf');
+                    return !isCrossed;
+                }
+            }
+            // Also check aria-labels
+            const ariaEls = document.querySelectorAll('[aria-label*="wheelchair" i], [aria-label*="Wheelchair" i]');
+            if (ariaEls.length > 0) return true;
+            return null; // unknown
+        });
     } catch (err) {
         log.warning(`extractCoreInfo error: ${err.message}`);
     }
@@ -217,8 +287,8 @@ export async function extractRatingsAndReviews(page, log, deepScrape = false) {
             result.reviewCount = digits ? parseInt(digits, 10) : null;
         }
 
-        // Rating distribution from histogram
-        result.ratingDistribution = await extractRatingDistribution(page, log);
+        // Rating distribution from histogram (pass reviewCount to convert percentages to counts)
+        result.ratingDistribution = await extractRatingDistribution(page, log, result.reviewCount);
 
         // Review highlights
         const highlightEls = await resolveSelectorAll(page, SELECTORS.placeDetail.reviewHighlights, { log });
@@ -240,29 +310,41 @@ export async function extractRatingsAndReviews(page, log, deepScrape = false) {
     return result;
 }
 
-async function extractRatingDistribution(page, log) {
+async function extractRatingDistribution(page, log, totalReviewCount = null) {
     const rows = await resolveSelectorAll(page, SELECTORS.placeDetail.ratingDistribution, { log });
     if (rows.length === 0) return null;
 
     const distribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    let hasPercentages = false;
+
     for (const row of rows) {
         try {
             const ariaLabel = await row.evaluate((el) => el.getAttribute('aria-label') || el.textContent || '');
             // Pattern: "5 stars, 45%" or "5 stars 234 reviews"
             const starMatch = ariaLabel.match(/(\d)\s*star/i);
+            const countMatch = ariaLabel.match(/(\d[\d,]*)\s*review/i);
             const pctMatch = ariaLabel.match(/(\d+)%/);
-            const countMatch = ariaLabel.match(/(\d+)\s*review/i);
 
             if (starMatch) {
                 const stars = parseInt(starMatch[1], 10);
-                if (pctMatch) {
+                if (countMatch) {
+                    // Direct count — best case
+                    distribution[stars] = parseInt(countMatch[1].replace(/,/g, ''), 10);
+                } else if (pctMatch) {
+                    // Percentage — we'll convert to counts if we have totalReviewCount
                     distribution[stars] = parseInt(pctMatch[1], 10);
-                } else if (countMatch) {
-                    distribution[stars] = parseInt(countMatch[1], 10);
+                    hasPercentages = true;
                 }
             }
         } catch {
             // Skip malformed row
+        }
+    }
+
+    // Convert percentages to estimated counts
+    if (hasPercentages && totalReviewCount) {
+        for (const star of [5, 4, 3, 2, 1]) {
+            distribution[star] = Math.round((distribution[star] / 100) * totalReviewCount);
         }
     }
 
@@ -419,6 +501,7 @@ async function scrollReviewsPanel(page, log, maxReviews) {
 export async function extractHours(page, log) {
     const result = {
         weeklyHours: null,
+        specialHours: null,
         currentStatus: null,
     };
 
@@ -466,6 +549,30 @@ export async function extractHours(page, log) {
                 result.weeklyHours = null;
             }
         }
+
+        // Special/holiday hours
+        const specialRows = await resolveSelectorAll(page, SELECTORS.placeDetail.specialHoursRow, { log });
+        if (specialRows.length > 0) {
+            result.specialHours = [];
+            for (const row of specialRows) {
+                try {
+                    const data = await row.evaluate((tr) => {
+                        const cells = tr.querySelectorAll('td');
+                        if (cells.length >= 2) {
+                            return {
+                                date: cells[0].textContent?.trim() || null,
+                                hours: cells[1].textContent?.trim() || null,
+                            };
+                        }
+                        return null;
+                    });
+                    if (data) result.specialHours.push(data);
+                } catch {
+                    // Skip
+                }
+            }
+            if (result.specialHours.length === 0) result.specialHours = null;
+        }
     } catch (err) {
         log.warning(`extractHours error: ${err.message}`);
     }
@@ -479,8 +586,7 @@ export async function extractPhotos(page, log, deepScrape = false) {
     const result = {
         coverPhotoUrl: null,
         photoCount: null,
-        photoCategories: [],
-        photoUrls: null,
+        photosByCategory: null,
     };
 
     try {
@@ -501,9 +607,9 @@ export async function extractPhotos(page, log, deepScrape = false) {
             result.photoCount = digits ? parseInt(digits, 10) : null;
         }
 
-        // Deep scrape photos
+        // Deep scrape photos — categorized by section (Interior, Exterior, Food, etc.)
         if (deepScrape) {
-            result.photoUrls = await extractPhotoGallery(page, log);
+            result.photosByCategory = await extractPhotoGallery(page, log);
         }
     } catch (err) {
         log.warning(`extractPhotos error: ${err.message}`);
@@ -513,7 +619,7 @@ export async function extractPhotos(page, log, deepScrape = false) {
 }
 
 async function extractPhotoGallery(page, log) {
-    const allPhotos = [];
+    const categorizedPhotos = {};
 
     try {
         // Click on the cover photo or photos tab to open gallery
@@ -529,29 +635,70 @@ async function extractPhotoGallery(page, log) {
             }
         }
 
-        // Scroll gallery to load images
-        for (let i = 0; i < 5; i++) {
-            await page.evaluate(() => {
-                const scrollable = document.querySelector('.m6QErb.DxyBCb') || document.querySelector('div[role="main"]');
-                if (scrollable) scrollable.scrollTo(0, scrollable.scrollHeight);
-            });
-            await sleep(1500);
+        // Get photo category tabs
+        const catTabs = await resolveSelectorAll(page, SELECTORS.placeDetail.photoCategoryTab, { log });
+
+        if (catTabs.length > 1) {
+            // Click each category tab and extract photos
+            for (const tab of catTabs) {
+                try {
+                    const categoryName = await tab.evaluate((el) => el.textContent?.trim() || 'All');
+                    if (categoryName === 'All') continue; // Skip "All" to avoid duplicates
+
+                    await tab.click();
+                    await sleep(1500);
+
+                    // Scroll to load photos in this category
+                    for (let i = 0; i < 3; i++) {
+                        await page.evaluate(() => {
+                            const s = document.querySelector('.m6QErb.DxyBCb') || document.querySelector('div[role="main"]');
+                            if (s) s.scrollTo(0, s.scrollHeight);
+                        });
+                        await sleep(1000);
+                    }
+
+                    // Extract photos for this category
+                    const imgEls = await resolveSelectorAll(page, SELECTORS.placeDetail.photoGalleryImage, { log });
+                    const urls = [];
+                    for (const img of imgEls.slice(0, 20)) {
+                        try {
+                            const src = await img.evaluate((el) => {
+                                const s = el.src || el.getAttribute('data-src') || el.getAttribute('src') || '';
+                                return s.replace(/=w\d+-h\d+/, '=w800-h600') || s;
+                            });
+                            if (src && src.includes('googleusercontent')) urls.push(src);
+                        } catch { /* skip */ }
+                    }
+
+                    if (urls.length > 0) categorizedPhotos[categoryName] = urls;
+                } catch {
+                    // Skip this category
+                }
+            }
         }
 
-        // Extract photo URLs
-        const imgEls = await resolveSelectorAll(page, SELECTORS.placeDetail.photoGalleryImage, { log });
-        for (const img of imgEls.slice(0, 60)) {
-            try {
-                const src = await img.evaluate((el) => {
-                    const s = el.src || el.getAttribute('src') || '';
-                    return s.replace(/=w\d+-h\d+/, '=w800-h600') || s;
+        // Fallback: if no category tabs or none worked, get all photos flat
+        if (Object.keys(categorizedPhotos).length === 0) {
+            for (let i = 0; i < 5; i++) {
+                await page.evaluate(() => {
+                    const s = document.querySelector('.m6QErb.DxyBCb') || document.querySelector('div[role="main"]');
+                    if (s) s.scrollTo(0, s.scrollHeight);
                 });
-                if (src && src.includes('googleusercontent')) {
-                    allPhotos.push(src);
-                }
-            } catch {
-                // Skip
+                await sleep(1500);
             }
+
+            const imgEls = await resolveSelectorAll(page, SELECTORS.placeDetail.photoGalleryImage, { log });
+            const urls = [];
+            for (const img of imgEls.slice(0, 60)) {
+                try {
+                    const src = await img.evaluate((el) => {
+                        const s = el.src || el.getAttribute('data-src') || el.getAttribute('src') || '';
+                        return s.replace(/=w\d+-h\d+/, '=w800-h600') || s;
+                    });
+                    if (src && src.includes('googleusercontent')) urls.push(src);
+                } catch { /* skip */ }
+            }
+            if (urls.length > 0) categorizedPhotos['All'] = urls;
         }
 
         // Navigate back
@@ -561,7 +708,7 @@ async function extractPhotoGallery(page, log) {
         log.warning(`extractPhotoGallery error: ${err.message}`);
     }
 
-    return allPhotos.length > 0 ? allPhotos : null;
+    return Object.keys(categorizedPhotos).length > 0 ? categorizedPhotos : null;
 }
 
 // ========== ATTRIBUTES & AMENITIES ==========
@@ -644,39 +791,43 @@ export async function extractPopularTimes(page, log) {
         const { element: container } = await resolveSelector(page, SELECTORS.placeDetail.popularTimesContainer, { log });
         if (!container) return result;
 
-        const popularTimes = {};
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const popularTimes = {};
 
-        // Extract bar data from aria-labels
-        const bars = await resolveSelectorAll(page, SELECTORS.placeDetail.popularTimeBar, { log });
-        let currentDay = null;
-        let dayBars = [];
+        // Get day tabs to click through all 7 days
+        const dayTabs = await resolveSelectorAll(page, SELECTORS.placeDetail.popularTimesDayTab, { log });
 
-        for (const bar of bars) {
-            try {
-                const ariaLabel = await bar.evaluate((el) => el.getAttribute('aria-label') || '');
-                // Pattern: "Usually not too busy at 6 AM." or "Usually as busy as it gets around 12 PM, 78% busy."
-                const hourMatch = ariaLabel.match(/at\s+(\d+\s*(?:AM|PM))/i) ||
-                    ariaLabel.match(/around\s+(\d+\s*(?:AM|PM))/i);
-                const pctMatch = ariaLabel.match(/(\d+)%/);
+        if (dayTabs.length >= 7) {
+            // Click each day tab and extract bars
+            for (let d = 0; d < Math.min(dayTabs.length, 7); d++) {
+                try {
+                    await dayTabs[d].click();
+                    await sleep(500);
 
-                if (hourMatch) {
-                    dayBars.push({
-                        hour: hourMatch[1],
-                        busynessPercent: pctMatch ? parseInt(pctMatch[1], 10) : 0,
-                    });
+                    const dayBars = await extractBarsForCurrentDay(page);
+                    if (dayBars.length > 0) {
+                        popularTimes[days[d]] = dayBars;
+                    }
+                } catch {
+                    // Skip this day
                 }
-            } catch {
-                // Skip
+            }
+        } else {
+            // No day tabs — extract whatever is visible as a single day
+            const dayBars = await extractBarsForCurrentDay(page);
+            if (dayBars.length > 0) {
+                // Try to detect which day is currently showing
+                const activeDayLabel = await page.evaluate(() => {
+                    const active = document.querySelector('.C7xf8b button[aria-selected="true"]') ||
+                        document.querySelector('.C7xf8b button.KoToPc');
+                    return active?.textContent?.trim() || active?.getAttribute('aria-label') || null;
+                });
+                const dayKey = activeDayLabel || 'CurrentDay';
+                popularTimes[dayKey] = dayBars;
             }
         }
 
-        // Google shows one day at a time — we get the currently visible day
-        // For a full extraction we'd need to click each day tab
-        // For now, extract whatever is visible
-        if (dayBars.length > 0) {
-            result.popularTimes = { data: dayBars };
-        }
+        result.popularTimes = Object.keys(popularTimes).length > 0 ? popularTimes : null;
 
         // Live visit data
         result.liveVisitData = await resolveSelectorText(page, SELECTORS.placeDetail.liveVisitData, { log });
@@ -685,6 +836,31 @@ export async function extractPopularTimes(page, log) {
     }
 
     return result;
+}
+
+async function extractBarsForCurrentDay(page) {
+    const bars = await page.$$('.dpoVLd[aria-label], div[aria-label*="busy"], .C7xf8b div[aria-label]');
+    const dayBars = [];
+
+    for (const bar of bars) {
+        try {
+            const ariaLabel = await bar.evaluate((el) => el.getAttribute('aria-label') || '');
+            const hourMatch = ariaLabel.match(/at\s+(\d+\s*(?:AM|PM))/i) ||
+                ariaLabel.match(/around\s+(\d+\s*(?:AM|PM))/i);
+            const pctMatch = ariaLabel.match(/(\d+)%/);
+
+            if (hourMatch) {
+                dayBars.push({
+                    hour: hourMatch[1].trim(),
+                    busynessPercent: pctMatch ? parseInt(pctMatch[1], 10) : 0,
+                });
+            }
+        } catch {
+            // Skip
+        }
+    }
+
+    return dayBars;
 }
 
 // ========== DESCRIPTION ==========
@@ -812,13 +988,16 @@ export async function extractPosts(page, log) {
                 const data = await postEl.evaluate((el) => {
                     const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
                     const getSrc = (sel) => el.querySelector(sel)?.src || null;
+                    // CTA button — try multiple selectors
+                    const ctaEl = el.querySelector('a.Gx1XGd') || el.querySelector('a[data-item-id*="cta"]') ||
+                        el.querySelector('a[href]:not([href="#"])');
                     return {
                         title: getText('.tHYF9e') || null,
-                        text: getText('.gAzKNe span') || null,
+                        text: getText('.gAzKNe span') || getText('.fontBodyMedium') || null,
                         imageUrl: getSrc('.ofB6Xe img') || getSrc('img'),
-                        date: getText('.rsqaWe') || null,
-                        ctaText: getText('a.Gx1XGd') || getText('button') || null,
-                        ctaUrl: el.querySelector('a.Gx1XGd')?.href || null,
+                        date: getText('.rsqaWe') || getText('.dehysf') || null,
+                        ctaText: ctaEl?.textContent?.trim() || null,
+                        ctaUrl: ctaEl?.href || null,
                     };
                 });
                 posts.push(data);
@@ -849,11 +1028,24 @@ export async function extractProducts(page, log) {
             try {
                 const data = await pEl.evaluate((el) => {
                     const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
+                    // Image: check src, data-src, and background-image for lazy-loaded images
+                    const img = el.querySelector('img');
+                    let imageUrl = null;
+                    if (img) {
+                        imageUrl = img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || null;
+                    }
+                    if (!imageUrl) {
+                        const bgEl = el.querySelector('[style*="background-image"]');
+                        if (bgEl) {
+                            const m = bgEl.style.backgroundImage?.match(/url\(["']?([^"')]+)/);
+                            if (m) imageUrl = m[1];
+                        }
+                    }
                     return {
                         name: getText('.fontTitleSmall') || getText('h3') || null,
                         price: getText('.fontBodyMedium') || null,
                         description: getText('.fontBodySmall') || null,
-                        imageUrl: el.querySelector('img')?.src || null,
+                        imageUrl,
                     };
                 });
                 if (data.name) products.push(data);
@@ -884,10 +1076,12 @@ export async function extractServices(page, log) {
             try {
                 const data = await sEl.evaluate((el) => {
                     const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
+                    const img = el.querySelector('img');
                     return {
                         name: getText('.fontTitleSmall') || getText('h3') || null,
                         price: getText('.fontBodyMedium') || null,
                         description: getText('.fontBodySmall') || null,
+                        imageUrl: img?.src || img?.getAttribute('data-src') || null,
                     };
                 });
                 if (data.name) services.push(data);

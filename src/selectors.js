@@ -107,6 +107,16 @@ export const SELECTORS = {
             fallbacks: ['div.permanent-closed', 'span[data-closed="permanent"]'],
             description: 'Permanently closed notice',
         },
+        openingDate: {
+            primary: '[data-item-id="merchant_established"]',
+            fallbacks: ['span[aria-label*="Opened"]', 'div[data-attrid*="opening"]'],
+            description: 'Business opening date',
+        },
+        knowledgePanelSummary: {
+            primary: '.PYvSYb span',
+            fallbacks: ['div[data-attrid="kc:/location/location:description"] span', '.bkqMod span'],
+            description: 'Knowledge panel summary/description text',
+        },
 
         // ========== RATINGS & REVIEWS ==========
         ratingValue: {
@@ -221,6 +231,16 @@ export const SELECTORS = {
             fallbacks: ['.OqCZI span.ZLl8Od', 'span[data-opens]'],
             description: 'Current open/closed status text',
         },
+        specialHoursSection: {
+            primary: '.OqCZI .g2BVhd',
+            fallbacks: ['div[aria-label*="Special hours"]', 'div[aria-label*="Holiday"]'],
+            description: 'Special/holiday hours section',
+        },
+        specialHoursRow: {
+            primary: '.OqCZI .g2BVhd tr',
+            fallbacks: ['div[aria-label*="Special hours"] tr'],
+            description: 'Individual special/holiday hours row',
+        },
 
         // ========== PHOTOS ==========
         coverPhoto: {
@@ -296,6 +316,11 @@ export const SELECTORS = {
             primary: '.dpoVLd[aria-label]',
             fallbacks: ['div[aria-label*="busy"]', '.C7xf8b div[aria-label]'],
             description: 'Individual bar with busyness aria-label',
+        },
+        popularTimesDayTab: {
+            primary: '.C7xf8b button[data-tab-index]',
+            fallbacks: ['.g2BVhd button[aria-label]', 'div[aria-label*="Popular times"] button'],
+            description: 'Day tab buttons in popular times section (Sun-Sat)',
         },
         liveVisitData: {
             primary: '.Gzq8Ee',
