@@ -64,16 +64,15 @@ for (const url of placeUrls) {
 
 // ========== CONFIGURE CRAWLER ==========
 
-// Configure proxy — use Apify's datacenter proxies (available on all plans)
-// For better results, upgrade to RESIDENTIAL or GOOGLE_SERP proxy groups
+// Configure proxy — BUYPROXIES94952 has 27 USA datacenter IPs for rotation
 let proxyConfiguration = null;
 try {
     proxyConfiguration = await Actor.createProxyConfiguration({
-        groups: ['SHADER'],  // Apify's default datacenter proxy
+        groups: ['BUYPROXIES94952'],
     });
-} catch {
-    // If no proxy available, run without proxy
-    console.log('No proxy configured — running without proxy');
+    log.info('Using BUYPROXIES94952 proxy group (27 USA IPs)');
+} catch (err) {
+    log.warning(`Proxy setup failed: ${err.message} — running without proxy`);
 }
 
 const crawler = new PuppeteerCrawler({
