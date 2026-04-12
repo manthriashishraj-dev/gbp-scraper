@@ -599,7 +599,9 @@ export async function extractPhotos(page, log, deepScrape = false) {
     const result = {
         coverPhotoUrl: null,
         photoCount: null,
+        videoCount: null,
         photosByCategory: null,
+        recentPhotos: null,
         latestPhotoDate: null,
         latestPhotoUploader: null,
     };
@@ -610,7 +612,6 @@ export async function extractPhotos(page, log, deepScrape = false) {
         if (coverEl) {
             result.coverPhotoUrl = await coverEl.evaluate((img) => {
                 const src = img.src || img.getAttribute('src') || '';
-                // Get highest resolution version
                 return src.replace(/=w\d+-h\d+/, '=w800-h600') || src;
             });
         }
@@ -622,12 +623,14 @@ export async function extractPhotos(page, log, deepScrape = false) {
             result.photoCount = digits ? parseInt(digits, 10) : null;
         }
 
-        // Deep scrape photos — categorized by section (Interior, Exterior, Food, etc.)
+        // Deep scrape photos
         if (deepScrape) {
             const galleryData = await extractPhotoGallery(page, log);
             result.photosByCategory = galleryData.photos;
             result.latestPhotoDate = galleryData.latestPhotoDate;
             result.latestPhotoUploader = galleryData.latestPhotoUploader;
+            result.videoCount = galleryData.videoCount;
+            result.recentPhotos = galleryData.recentPhotos;
         }
     } catch (err) {
         log.warning(`extractPhotos error: ${err.message}`);
@@ -640,6 +643,8 @@ async function extractPhotoGallery(page, log) {
     const categorizedPhotos = {};
     let latestPhotoDate = null;
     let latestPhotoUploader = null;
+    let videoCount = 0;
+    const recentPhotos = [];
 
     try {
         // Click on the cover photo or photos tab to open gallery
@@ -655,77 +660,110 @@ async function extractPhotoGallery(page, log) {
             }
         }
 
-        // First: click on "Latest" tab to get the most recent photo's date
-        const latestTab = await page.evaluate(() => {
+        // Extract photo + video counts from the gallery header (e.g. "📷 61  👁 0")
+        const mediaCounts = await page.evaluate(() => {
+            const text = document.body.innerText || '';
+            // Look for patterns like "📷 61" and "👁 2" or icon-based counters
+            const photoMatch = text.match(/📷\s*(\d+)/);
+            const videoMatch = text.match(/👁\s*(\d+)/) || text.match(/🎬\s*(\d+)/);
+            // Also try the header stats area
+            const statEls = document.querySelectorAll('.RZ66Rb span, .cRLbXd span, .YkuOqf span');
+            let photos = photoMatch ? parseInt(photoMatch[1], 10) : null;
+            let videos = videoMatch ? parseInt(videoMatch[1], 10) : 0;
+            for (const el of statEls) {
+                const t = el.textContent || '';
+                if (t.includes('video')) {
+                    const m = t.match(/(\d+)/);
+                    if (m) videos = parseInt(m[1], 10);
+                }
+            }
+            return { photos, videos };
+        });
+        videoCount = mediaCounts.videos || 0;
+
+        // Click on "Latest" tab to sort by date and get recent photo metadata
+        const hasLatestTab = await page.evaluate(() => {
             const tabs = document.querySelectorAll('.OKAoZd button, .ZKCDEc button, div[role="tablist"] button');
             for (const tab of tabs) {
-                if (tab.textContent?.trim().toLowerCase() === 'latest') return true;
+                if (tab.textContent?.trim().toLowerCase() === 'latest') {
+                    tab.click();
+                    return true;
+                }
             }
+            // Also try "Date" sort dropdown
+            const sortBtn = document.querySelector('button[aria-label*="Sort"], button[aria-label*="Date"]');
+            if (sortBtn) { sortBtn.click(); return true; }
             return false;
         });
-        if (latestTab) {
-            // Click the "Latest" tab
-            await page.evaluate(() => {
-                const tabs = document.querySelectorAll('.OKAoZd button, .ZKCDEc button, div[role="tablist"] button');
-                for (const tab of tabs) {
-                    if (tab.textContent?.trim().toLowerCase() === 'latest') {
-                        tab.click();
-                        break;
-                    }
-                }
-            });
+
+        if (hasLatestTab) {
             await sleep(2000);
 
-            // Click the first (most recent) photo to see its metadata
-            const firstPhoto = await page.$('a[data-photo-index="0"]') ||
-                await page.$('.U39Pmb:first-child') ||
-                await page.$('div[data-photo-index] a:first-child');
-            if (firstPhoto) {
-                await firstPhoto.click();
-                await sleep(1500);
+            // Click through the first few photos to get date metadata for each
+            const photoItems = await page.$$('a[data-photo-index], .U39Pmb, div[data-photo-index]');
+            const maxToCheck = Math.min(photoItems.length, 10); // Check first 10 recent photos
 
-                // Extract uploader name and date from the photo detail overlay
-                const photoMeta = await page.evaluate(() => {
-                    // The overlay shows: "Business Name · 4 days ago" or "User Name · 2 months ago"
-                    // Try multiple possible selectors for the metadata bar
-                    const metaSelectors = [
-                        '.fCpYHe', '.ZProGe', '.qCHGyb', '.T6pBCe',
-                        'div[jsaction*="photo"] header', '.lbkBkb',
-                    ];
-                    for (const sel of metaSelectors) {
-                        const el = document.querySelector(sel);
-                        if (el) {
-                            const text = el.textContent?.trim() || '';
-                            // Pattern: "Name · X days/months/years ago"
-                            const parts = text.split('·').map((s) => s.trim());
-                            if (parts.length >= 2) {
-                                return { uploader: parts[0], date: parts[1] };
-                            }
-                            // Also try aria-label
-                            const ariaEl = el.querySelector('[aria-label]');
-                            if (ariaEl) {
-                                return { uploader: null, date: ariaEl.getAttribute('aria-label') };
+            for (let pi = 0; pi < maxToCheck; pi++) {
+                try {
+                    // Re-query because DOM may have changed after closing overlay
+                    const items = await page.$$('a[data-photo-index], .U39Pmb');
+                    if (pi >= items.length) break;
+
+                    await items[pi].click();
+                    await sleep(1200);
+
+                    // Extract uploader name and date from the photo detail overlay
+                    const photoMeta = await page.evaluate(() => {
+                        const metaSelectors = [
+                            '.fCpYHe', '.ZProGe', '.qCHGyb', '.T6pBCe',
+                            'div[jsaction*="photo"] header', '.lbkBkb',
+                        ];
+                        for (const sel of metaSelectors) {
+                            const el = document.querySelector(sel);
+                            if (el) {
+                                const text = el.textContent?.trim() || '';
+                                const parts = text.split('·').map((s) => s.trim());
+                                if (parts.length >= 2) {
+                                    return { uploader: parts[0], date: parts[1] };
+                                }
                             }
                         }
+                        const uploaderEl = document.querySelector('.Aq14fc span, .fCpYHe span:first-child');
+                        const dateEl = document.querySelector('.fCpYHe .rsqaWe, .dehysf, span[aria-label*="ago"]');
+                        return {
+                            uploader: uploaderEl?.textContent?.trim() || null,
+                            date: dateEl?.textContent?.trim() || null,
+                        };
+                    });
+
+                    if (photoMeta.date || photoMeta.uploader) {
+                        recentPhotos.push({
+                            index: pi,
+                            uploader: photoMeta.uploader,
+                            date: photoMeta.date,
+                        });
                     }
-                    // Try the separate elements approach
-                    const uploaderEl = document.querySelector('.Aq14fc span, .fCpYHe span:first-child');
-                    const dateEl = document.querySelector('.fCpYHe .rsqaWe, .dehysf, span[aria-label*="ago"]');
-                    return {
-                        uploader: uploaderEl?.textContent?.trim() || null,
-                        date: dateEl?.textContent?.trim() || null,
-                    };
-                });
 
-                latestPhotoUploader = photoMeta.uploader;
-                latestPhotoDate = photoMeta.date;
+                    // First photo is the latest
+                    if (pi === 0) {
+                        latestPhotoUploader = photoMeta.uploader;
+                        latestPhotoDate = photoMeta.date;
+                    }
 
-                log.info(`Latest photo: uploaded by "${latestPhotoUploader}" — ${latestPhotoDate}`);
-
-                // Close the photo overlay
-                await page.keyboard.press('Escape');
-                await sleep(1000);
+                    // Close the overlay
+                    await page.keyboard.press('Escape');
+                    await sleep(800);
+                } catch {
+                    // If clicking a photo fails, try to close any overlay and continue
+                    try { await page.keyboard.press('Escape'); } catch { /* */ }
+                    await sleep(500);
+                }
             }
+
+            if (latestPhotoDate) {
+                log.info(`Latest photo: by "${latestPhotoUploader}" — ${latestPhotoDate}`);
+            }
+            log.info(`Extracted dates for ${recentPhotos.length} recent photos, ${videoCount} videos found`);
         }
 
         // Now extract categorized photos
@@ -802,6 +840,8 @@ async function extractPhotoGallery(page, log) {
         photos: Object.keys(categorizedPhotos).length > 0 ? categorizedPhotos : null,
         latestPhotoDate,
         latestPhotoUploader,
+        videoCount,
+        recentPhotos: recentPhotos.length > 0 ? recentPhotos : null,
     };
 }
 
