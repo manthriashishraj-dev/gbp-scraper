@@ -64,15 +64,24 @@ for (const url of placeUrls) {
 
 // ========== CONFIGURE CRAWLER ==========
 
-// Configure proxy — BUYPROXIES94952 has 27 USA datacenter IPs for rotation
+// Configure proxy — RESIDENTIAL proxies make Google serve full pages (tabs, reviews, etc.)
 let proxyConfiguration = null;
 try {
     proxyConfiguration = await Actor.createProxyConfiguration({
-        groups: ['BUYPROXIES94952'],
+        groups: ['RESIDENTIAL'],
+        countryCode: 'US',
     });
-    log.info('Using BUYPROXIES94952 proxy group (27 USA IPs)');
+    log.info('Using RESIDENTIAL proxy (US)');
 } catch (err) {
-    log.warning(`Proxy setup failed: ${err.message} — running without proxy`);
+    log.warning(`Residential proxy failed: ${err.message} — trying datacenter proxy`);
+    try {
+        proxyConfiguration = await Actor.createProxyConfiguration({
+            groups: ['BUYPROXIES94952'],
+        });
+        log.info('Using BUYPROXIES94952 datacenter proxy');
+    } catch {
+        log.warning('No proxy available — running without proxy');
+    }
 }
 
 const crawler = new PuppeteerCrawler({
