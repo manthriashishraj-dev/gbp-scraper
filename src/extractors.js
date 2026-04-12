@@ -373,117 +373,298 @@ async function extractDetailedReviews(page, log) {
     const reviews = [];
 
     try {
-        // Click "More reviews" button to open review panel
-        const { element: moreBtn } = await resolveSelector(page, SELECTORS.placeDetail.moreReviewsButton, { log });
-        if (moreBtn) {
-            await moreBtn.click();
+        const currentUrl = page.url();
+        const businessName = await page.$eval('h1', (el) => el.textContent?.trim()).catch(() => null);
+
+        // ===== PRIMARY: KP Reviews Panel via Google Search =====
+        // This opens reviews in an iframe that Puppeteer can access via page.frames()
+        if (businessName) {
+            log.info('Extracting reviews via Knowledge Panel (Google Search)...');
+            const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(businessName)}`;
+            await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            await sleep(2500);
+
+            // Click "X Google reviews" link to open the reviews panel
+            await page.evaluate(() => {
+                const links = document.querySelectorAll('a');
+                for (const a of links) {
+                    const text = a.textContent?.trim() || '';
+                    if (text.includes('Google reviews') && text.match(/\d+/)) {
+                        a.click();
+                        return;
+                    }
+                }
+            });
+            await sleep(3000);
+
+            // Click "Newest" sort button inside the reviews panel
+            await page.evaluate(() => {
+                const btns = document.querySelectorAll('button, span[role="button"], div[role="button"]');
+                for (const b of btns) {
+                    if (b.textContent?.trim() === 'Newest') { b.click(); return; }
+                }
+            });
             await sleep(2000);
+
+            // Find the reviews iframe (Puppeteer can access cross-origin frames)
+            let reviewFrame = null;
+            const frames = page.frames();
+            for (const frame of frames) {
+                try {
+                    const hasReviews = await frame.evaluate(() => {
+                        return document.querySelectorAll('.jftiEf, [data-review-id], span[aria-label*="star"]').length > 0;
+                    }).catch(() => 0);
+                    if (hasReviews > 0) {
+                        reviewFrame = frame;
+                        break;
+                    }
+                } catch { /* skip inaccessible frames */ }
+            }
+
+            // If no iframe found, reviews might be in the main page
+            if (!reviewFrame) {
+                const mainPageReviews = await page.evaluate(() => {
+                    return document.querySelectorAll('span[aria-label*="star"]').length;
+                });
+                if (mainPageReviews > 0) reviewFrame = page.mainFrame();
+            }
+
+            if (reviewFrame) {
+                // Click "Newest" inside the frame too
+                await reviewFrame.evaluate(() => {
+                    const btns = document.querySelectorAll('button, span[role="button"], div[role="button"]');
+                    for (const b of btns) {
+                        if (b.textContent?.trim() === 'Newest') { b.click(); break; }
+                    }
+                }).catch(() => {});
+                await sleep(2000);
+
+                // Scroll to load all reviews in the frame
+                for (let i = 0; i < 30; i++) {
+                    const count = await reviewFrame.evaluate(() => {
+                        const reviews = document.querySelectorAll('.jftiEf, [data-review-id]');
+                        const scrollable = document.querySelector('.review-dialog-list, .m6QErb, [role="list"]') || document.documentElement;
+                        scrollable.scrollTo(0, scrollable.scrollHeight);
+                        return reviews.length;
+                    }).catch(() => 0);
+
+                    if (count >= 95) break; // All reviews loaded
+                    await sleep(1000);
+                }
+
+                // Expand all "More" buttons
+                await reviewFrame.evaluate(() => {
+                    const btns = document.querySelectorAll('button.w8nwRe, button[aria-label="See more"], [data-expandable-section] button');
+                    btns.forEach(b => { try { b.click(); } catch {} });
+                }).catch(() => {});
+                await sleep(1000);
+
+                // Extract ALL reviews from the frame
+                const extractedReviews = await reviewFrame.evaluate(() => {
+                    const results = [];
+                    // Try multiple selectors for review containers
+                    const reviewEls = document.querySelectorAll('.jftiEf, [data-review-id], .gws-localreviews__google-review');
+
+                    for (const el of reviewEls) {
+                        try {
+                            const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
+
+                            // Author name
+                            const authorEl = el.querySelector('.d4r55, .TSUbDb a, .reviewer-name');
+                            const author = authorEl?.textContent?.trim() || null;
+
+                            // Author profile URL
+                            const authorLink = el.querySelector('a[href*="contrib"], .TSUbDb a');
+                            const authorUrl = authorLink?.href || null;
+
+                            // Author review count + photo count
+                            const authorInfoEl = el.querySelector('.RfnDt, .reviewer-info, .A503be');
+                            const authorInfoText = authorInfoEl?.textContent?.trim() || '';
+                            const reviewCountMatch = authorInfoText.match(/(\d+)\s*review/i);
+                            const photoCountMatch = authorInfoText.match(/(\d+)\s*photo/i);
+                            const authorReviewCount = reviewCountMatch ? parseInt(reviewCountMatch[1], 10) : null;
+                            const authorPhotoCount = photoCountMatch ? parseInt(photoCountMatch[1], 10) : null;
+
+                            // Local Guide
+                            const isLocalGuide = authorInfoText.toLowerCase().includes('local guide');
+                            let localGuideLevel = null;
+                            const lvlMatch = authorInfoText.match(/Level\s*(\d+)/i);
+                            if (lvlMatch) localGuideLevel = parseInt(lvlMatch[1], 10);
+
+                            // Rating
+                            const ratingEl = el.querySelector('.kvMYJc, span[role="img"][aria-label*="star"]');
+                            let rating = null;
+                            if (ratingEl) {
+                                const ariaLabel = ratingEl.getAttribute('aria-label') || '';
+                                const m = ariaLabel.match(/(\d)/);
+                                if (m) rating = parseInt(m[1], 10);
+                            }
+
+                            // Date
+                            const dateEl = el.querySelector('.rsqaWe, .dehysf, .DU9Pgb');
+                            const date = dateEl?.textContent?.trim() || null;
+                            const isEdited = date?.toLowerCase().includes('edited') || false;
+
+                            // Review text
+                            const textEl = el.querySelector('span.wiI7pd, .review-full-text, .Jtu6Td');
+                            const text = textEl?.textContent?.trim() || null;
+
+                            // Owner response
+                            const ownerBlock = el.querySelector('.CDe7pd, .owner-response');
+                            let ownerResponseText = null;
+                            let ownerResponseDate = null;
+                            if (ownerBlock) {
+                                ownerResponseText = ownerBlock.querySelector('.wiI7pd, span')?.textContent?.trim() || null;
+                                ownerResponseDate = ownerBlock.querySelector('.rsqaWe, .DU9Pgb')?.textContent?.trim() || null;
+                            }
+
+                            // Likes/reactions
+                            const likesEl = el.querySelector('button.GBkF3d span, .pkWtMe, [aria-label*="Like"] span');
+                            let likesCount = 0;
+                            if (likesEl) {
+                                const n = parseInt(likesEl.textContent?.trim(), 10);
+                                if (!isNaN(n)) likesCount = n;
+                            }
+
+                            // Review photos
+                            const photoEls = el.querySelectorAll('img[src*="googleusercontent"]');
+                            const reviewPhotos = Array.from(photoEls)
+                                .map(img => img.src)
+                                .filter(src => src?.includes('googleusercontent'));
+
+                            results.push({
+                                author,
+                                authorUrl,
+                                authorReviewCount,
+                                authorPhotoCount,
+                                isLocalGuide,
+                                localGuideLevel,
+                                rating,
+                                date,
+                                isEdited,
+                                text,
+                                ownerResponseText,
+                                ownerResponseDate,
+                                likesCount,
+                                reviewPhotos,
+                            });
+                        } catch {
+                            // Skip malformed review
+                        }
+                    }
+                    return results;
+                }).catch(() => []);
+
+                if (extractedReviews.length > 0) {
+                    reviews.push(...extractedReviews);
+                    log.info(`KP Reviews: extracted ${reviews.length} reviews from Knowledge Panel`);
+                }
+            }
+
+            // Navigate back to Maps
+            await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            await sleep(1000);
         }
 
-        // Sort by newest
-        const { element: sortBtn } = await resolveSelector(page, SELECTORS.placeDetail.reviewsSortButton, { log });
-        if (sortBtn) {
-            await sortBtn.click();
-            await sleep(1000);
-            const { element: newestOpt } = await resolveSelector(page, SELECTORS.placeDetail.reviewsSortNewest, { log });
-            if (newestOpt) {
-                await newestOpt.click();
+        // ===== FALLBACK: Maps Reviews Panel =====
+        if (reviews.length === 0) {
+            log.info('KP reviews failed, falling back to Maps reviews panel...');
+
+            const { element: moreBtn } = await resolveSelector(page, SELECTORS.placeDetail.moreReviewsButton, { log });
+            if (moreBtn) {
+                await moreBtn.click();
                 await sleep(2000);
             }
-        }
 
-        // Scroll to load reviews (up to 100)
-        await scrollReviewsPanel(page, log, 100);
+            // Sort by newest
+            const { element: sortBtn } = await resolveSelector(page, SELECTORS.placeDetail.reviewsSortButton, { log });
+            if (sortBtn) {
+                await sortBtn.click();
+                await sleep(1000);
+                const { element: newestOpt } = await resolveSelector(page, SELECTORS.placeDetail.reviewsSortNewest, { log });
+                if (newestOpt) {
+                    await newestOpt.click();
+                    await sleep(2000);
+                }
+            }
 
-        // Expand ALL truncated review texts BEFORE extraction
-        // Click all "More" buttons multiple times (new ones appear as we scroll)
-        for (let expandPass = 0; expandPass < 3; expandPass++) {
-            const moreButtons = await page.$$(SELECTORS.placeDetail.reviewMoreButton.primary);
-            if (moreButtons.length === 0) break;
-            for (const btn of moreButtons) {
+            await scrollReviewsPanel(page, log, 100);
+
+            // Expand truncated texts
+            for (let expandPass = 0; expandPass < 3; expandPass++) {
+                const moreButtons = await page.$$(SELECTORS.placeDetail.reviewMoreButton.primary);
+                if (moreButtons.length === 0) break;
+                for (const btn of moreButtons) {
+                    try { await btn.click(); await sleep(200); } catch { /* */ }
+                }
+                await sleep(500);
+            }
+
+            const reviewEls = await resolveSelectorAll(page, SELECTORS.placeDetail.reviewItem, { log });
+            for (const reviewEl of reviewEls.slice(0, 100)) {
                 try {
-                    await btn.click();
-                    await sleep(200);
-                } catch { /* button may already be expanded */ }
+                    const review = await reviewEl.evaluate((el) => {
+                        const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
+                        const getHref = (sel) => el.querySelector(sel)?.href || null;
+
+                        const ratingEl = el.querySelector('.kvMYJc') || el.querySelector('span[role="img"]');
+                        let stars = null;
+                        if (ratingEl) {
+                            const m = (ratingEl.getAttribute('aria-label') || '').match(/(\d)/);
+                            if (m) stars = parseInt(m[1], 10);
+                        }
+
+                        const guideBadge = el.querySelector('.RfnDt span') || el.querySelector('.QV3IV');
+                        let isLocalGuide = false;
+                        let localGuideLevel = null;
+                        if (guideBadge) {
+                            isLocalGuide = true;
+                            const lvl = guideBadge.textContent?.match(/Level\s*(\d+)/i);
+                            if (lvl) localGuideLevel = parseInt(lvl[1], 10);
+                        }
+
+                        const photoEls = el.querySelectorAll('.KtCyie button img, img[src*="googleusercontent"]');
+                        const photos = Array.from(photoEls).map(i => i.src).filter(s => s?.includes('googleusercontent'));
+
+                        const likesEl = el.querySelector('button.GBkF3d span') || el.querySelector('span.pkWtMe');
+                        let likes = 0;
+                        if (likesEl) { const n = parseInt(likesEl.textContent?.trim(), 10); if (!isNaN(n)) likes = n; }
+
+                        const ownerRespText = getText('.CDe7pd .wiI7pd') || getText('.ODSEW .wiI7pd');
+                        const ownerRespDate = getText('.CDe7pd .rsqaWe') || getText('.ODSEW .DU9Pgb');
+                        const dateText = getText('.rsqaWe') || getText('.DU9Pgb');
+
+                        return {
+                            author: getText('.d4r55') || getText('.WNxzHc'),
+                            authorUrl: getHref('.WNxzHc a') || getHref('button.WEBjve'),
+                            authorReviewCount: null,
+                            authorPhotoCount: null,
+                            isLocalGuide,
+                            localGuideLevel,
+                            rating: stars,
+                            date: dateText,
+                            isEdited: dateText?.toLowerCase().includes('edited') || false,
+                            text: getText('span.wiI7pd') || getText('.MyEned span'),
+                            ownerResponseText: ownerRespText,
+                            ownerResponseDate: ownerRespDate,
+                            likesCount: likes,
+                            reviewPhotos: photos,
+                        };
+                    });
+                    reviews.push(review);
+                } catch (err) {
+                    log.warning(`Failed to extract review: ${err.message}`);
+                }
             }
-            await sleep(500);
+
+            await page.keyboard.press('Escape');
+            await sleep(1000);
         }
-
-        // Extract individual reviews
-        const reviewEls = await resolveSelectorAll(page, SELECTORS.placeDetail.reviewItem, { log });
-
-        for (const reviewEl of reviewEls.slice(0, 100)) {
-            try {
-                const review = await reviewEl.evaluate((el) => {
-                    const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
-                    const getAttr = (sel, attr) => el.querySelector(sel)?.getAttribute(attr) || null;
-                    const getHref = (sel) => el.querySelector(sel)?.href || null;
-
-                    // Rating from aria-label like "5 stars" or "Rated 4.0 out of 5"
-                    const ratingEl = el.querySelector('.kvMYJc') || el.querySelector('span[role="img"]');
-                    let stars = null;
-                    if (ratingEl) {
-                        const ariaLabel = ratingEl.getAttribute('aria-label') || '';
-                        const m = ariaLabel.match(/(\d)/);
-                        if (m) stars = parseInt(m[1], 10);
-                    }
-
-                    // Local Guide
-                    const guideBadge = el.querySelector('.RfnDt span') || el.querySelector('.QV3IV');
-                    let isLocalGuide = false;
-                    let localGuideLevel = null;
-                    if (guideBadge) {
-                        isLocalGuide = true;
-                        const lvlMatch = guideBadge.textContent?.match(/Level\s*(\d+)/i);
-                        if (lvlMatch) localGuideLevel = parseInt(lvlMatch[1], 10);
-                    }
-
-                    // Review photos
-                    const photoEls = el.querySelectorAll('.KtCyie button img, div[data-review-id] img[src*="googleusercontent"]');
-                    const photos = Array.from(photoEls)
-                        .map((img) => img.src)
-                        .filter((src) => src && src.includes('googleusercontent'));
-
-                    // Likes count
-                    const likesEl = el.querySelector('button.GBkF3d span') || el.querySelector('span.pkWtMe');
-                    let likes = 0;
-                    if (likesEl) {
-                        const n = parseInt(likesEl.textContent?.trim(), 10);
-                        if (!isNaN(n)) likes = n;
-                    }
-
-                    // Owner response
-                    const ownerRespText = getText('.CDe7pd .wiI7pd') || getText('.ODSEW .wiI7pd');
-                    const ownerRespDate = getText('.CDe7pd .rsqaWe') || getText('.ODSEW .DU9Pgb');
-
-                    return {
-                        author: getText('.d4r55') || getText('.WNxzHc'),
-                        authorUrl: getHref('.WNxzHc a') || getHref('button.WEBjve'),
-                        rating: stars,
-                        text: getText('span.wiI7pd') || getText('.MyEned span'),
-                        date: getText('.rsqaWe') || getText('.DU9Pgb'),
-                        ownerResponseText: ownerRespText,
-                        ownerResponseDate: ownerRespDate,
-                        likesCount: likes,
-                        reviewPhotos: photos,
-                        isLocalGuide,
-                        localGuideLevel,
-                    };
-                });
-
-                reviews.push(review);
-            } catch (err) {
-                log.warning(`Failed to extract a review: ${err.message}`);
-            }
-        }
-
-        // Navigate back to place page
-        await page.keyboard.press('Escape');
-        await sleep(1000);
     } catch (err) {
         log.warning(`extractDetailedReviews error: ${err.message}`);
     }
 
+    log.info(`Total reviews extracted: ${reviews.length}`);
     return reviews.length > 0 ? reviews : null;
 }
 
