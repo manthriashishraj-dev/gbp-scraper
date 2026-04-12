@@ -2417,7 +2417,16 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         kpPosts: [], kpReviewSnippets: [], kpBusyness: null, kpAppointmentUrl: null,
     };
     if (coreInfo.name) {
-        knowledgePanel = await extractFullKnowledgePanel(page, log, coreInfo.name);
+        // Try KP extraction up to 3 times (different proxy IP each attempt)
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            knowledgePanel = await extractFullKnowledgePanel(page, log, coreInfo.name);
+            if (knowledgePanel.description || knowledgePanel.socialProfiles.length > 0) {
+                log.info(`KP extraction succeeded on attempt ${attempt}`);
+                break;
+            }
+            log.warning(`KP attempt ${attempt} got empty results — retrying...`);
+            await sleep(2000);
+        }
     }
 
     // Use KP description as primary
