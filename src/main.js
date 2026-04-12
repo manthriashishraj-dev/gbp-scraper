@@ -87,7 +87,11 @@ const crawler = new PuppeteerCrawler({
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-gpu',
+                // GPU enabled — Google Maps needs it for full rendering!
+                '--enable-gpu',
+                '--use-gl=egl',
+                '--enable-webgl',
+                '--window-size=1920,1080',
                 '--disable-blink-features=AutomationControlled',
                 `--lang=${language}`,
             ],
@@ -104,8 +108,8 @@ const crawler = new PuppeteerCrawler({
             // Set a random user agent before each navigation
             await page.setUserAgent(randomUserAgent());
 
-            // Set viewport to a common desktop resolution
-            await page.setViewport({ width: 1366, height: 768 });
+            // Set viewport to full HD — Google Maps hides data on smaller viewports!
+            await page.setViewport({ width: 1920, height: 1080 });
 
             // Set accept-language header
             await page.setExtraHTTPHeaders({
