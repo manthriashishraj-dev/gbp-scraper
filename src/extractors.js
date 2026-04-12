@@ -1576,7 +1576,9 @@ export async function extractFullKnowledgePanel(page, log, businessName) {
     try {
         const currentUrl = page.url();
 
-        log.info(`Extracting Knowledge Panel via search: "${businessName}"`);
+        // Use a shorter search query — long business names with pipes confuse search
+        const shortName = businessName.split('|')[0].trim();
+        log.info(`Extracting Knowledge Panel via search: "${shortName}"`);
 
         // INTERACTION BYPASS: Navigate to Google.com and TYPE the search
         // instead of direct URL — Google trusts user-initiated searches more
@@ -1589,17 +1591,25 @@ export async function extractFullKnowledgePanel(page, log, businessName) {
             await searchBox.click();
             await sleep(500);
             // Type slowly like a human
-            await page.keyboard.type(businessName, { delay: 50 + Math.random() * 50 });
+            await page.keyboard.type(shortName, { delay: 50 + Math.random() * 50 });
             await sleep(500);
             await page.keyboard.press('Enter');
             await sleep(3000);
         } else {
             // Fallback: direct URL
-            await page.goto(`https://www.google.com/search?q=${encodeURIComponent(businessName)}`, {
+            await page.goto(`https://www.google.com/search?q=${encodeURIComponent(shortName)}`, {
                 waitUntil: 'domcontentloaded', timeout: 30000
             });
             await sleep(2500);
         }
+
+        // Debug: save screenshot of search results to see what Google shows
+        try {
+            const { Actor } = await import('apify');
+            const screenshot = await page.screenshot({ fullPage: false, type: 'png' });
+            await Actor.setValue('DEBUG_KP_SEARCH_RESULT', screenshot, { contentType: 'image/png' });
+            log.info('Saved KP search screenshot as DEBUG_KP_SEARCH_RESULT');
+        } catch {}
 
         // Step 1: Click "More" / "Show more" on description to get full text
         await page.evaluate(() => {
