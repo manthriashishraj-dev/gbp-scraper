@@ -441,23 +441,31 @@ async function extractDetailedReviews(page, log) {
     const reviews = [];
 
     try {
-        // ===== PRIMARY: Google Maps Reviews Tab =====
-        // [data-review-id] elements are the most reliable selector (22 found in live test)
-        log.info('Extracting reviews from Google Maps Reviews tab...');
+        // ===== Google Maps Reviews — handles both tab and no-tab layouts =====
+        log.info('Extracting reviews from Google Maps...');
 
-        // Step 1: Click Reviews tab
+        // Step 1: Try to click Reviews tab (exists in real browser, not in headless)
         const reviewTab = await page.$('button.hh2c6[aria-label*="Reviews"]');
         if (reviewTab) {
+            log.info('Reviews tab found — clicking...');
             await reviewTab.click();
             await sleep(2000);
+        } else {
+            // Headless layout: no tabs — reviews are in the scrollable panel
+            // Click "More reviews" button or link if it exists
+            log.info('No Reviews tab — headless layout, scrolling to find reviews...');
+            const moreReviews = await page.$('button[aria-label*="review" i], a[href*="reviews"]');
+            if (moreReviews) {
+                await moreReviews.click();
+                await sleep(2000);
+            }
         }
 
-        // Step 2: Sort by Newest
-        const sortBtn = await page.$('button[data-value="Sort"], button[aria-label*="Sort"]');
+        // Step 2: Sort by Newest (try both tab and non-tab sort buttons)
+        const sortBtn = await page.$('button[data-value="Sort"], button[aria-label*="Sort"], button.g88MCb');
         if (sortBtn) {
             await sortBtn.click();
             await sleep(1000);
-            // Click "Newest" option (data-index="1")
             const newestOpt = await page.$('[data-index="1"], [role="menuitemradio"]:nth-child(2)');
             if (newestOpt) {
                 await newestOpt.click();
@@ -466,20 +474,25 @@ async function extractDetailedReviews(page, log) {
         }
 
         // Step 3: Scroll to load ALL reviews
-        // Get total review count from the page to know our target
+        // Get total review count
         const totalReviewCount = await page.evaluate(() => {
-            const el = document.querySelector('span[aria-label*="reviews"]');
+            // Try aria-label
+            const el = document.querySelector('span[aria-label*="reviews" i]');
             if (el) {
                 const m = el.getAttribute('aria-label')?.match(/(\d+)/);
                 if (m) return parseInt(m[1], 10);
             }
-            // Fallback: parse from rating section text
+            // Try text like "(95)" near rating
             const f7 = document.querySelector('div.F7nice');
             if (f7) {
-                const m = f7.textContent?.match(/\((\d+)\)/);
-                if (m) return parseInt(m[1], 10);
+                const m = f7.textContent?.match(/\((\d[\d,]*)\)/);
+                if (m) return parseInt(m[1].replace(/,/g, ''), 10);
             }
-            return 999; // Unknown — keep scrolling
+            // Try any text with "reviews" and a number
+            const body = document.body.innerText;
+            const m = body.match(/(\d+)\s*reviews/i);
+            if (m) return parseInt(m[1], 10);
+            return 200; // Safe default
         });
         log.info(`Target: ${totalReviewCount} total reviews to load`);
 
@@ -509,12 +522,25 @@ async function extractDetailedReviews(page, log) {
             }
             prevCount = currentCount;
 
-            // Scroll
+            // Scroll — try ALL possible scrollable containers
             await page.evaluate(() => {
-                const scrollable = document.querySelector('.m6QErb.DxyBCb.kA9KIf.dS8AEf') ||
-                    document.querySelector('.m6QErb.DxyBCb') ||
-                    document.querySelector('div[role="main"]');
-                if (scrollable) scrollable.scrollTo(0, scrollable.scrollHeight);
+                // Try specific review panel containers first, then generic
+                const containers = [
+                    '.m6QErb.DxyBCb.kA9KIf.dS8AEf',
+                    '.m6QErb.DxyBCb',
+                    'div[role="main"]',
+                    '.section-layout.section-scrollbox',
+                    '.section-listbox',
+                ];
+                for (const sel of containers) {
+                    const el = document.querySelector(sel);
+                    if (el && el.scrollHeight > el.clientHeight) {
+                        el.scrollTo(0, el.scrollHeight);
+                        return;
+                    }
+                }
+                // Last resort: scroll the whole page
+                window.scrollTo(0, document.body.scrollHeight);
             });
             await sleep(1200 + Math.random() * 500);
         }
@@ -1293,20 +1319,27 @@ export async function extractAttributes(page, log) {
     };
 
     try {
-        // Try clicking "About" tab to see all attributes
-        const { element: aboutTab } = await resolveSelector(page, SELECTORS.placeDetail.aboutTab, { log });
+        // Try clicking "About" tab (only exists in non-headless)
+        const aboutTab = await page.$('button.hh2c6[aria-label*="About"]');
         if (aboutTab) {
             await aboutTab.click();
             await sleep(2000);
+        }
 
-            // Scroll down within the About panel to load all attribute sections
-            for (let i = 0; i < 3; i++) {
-                await page.evaluate(() => {
-                    const panel = document.querySelector('.m6QErb.DxyBCb') || document.querySelector('div[role="main"]');
-                    if (panel) panel.scrollTo(0, panel.scrollHeight);
-                });
-                await sleep(800);
-            }
+        // Scroll to load all attribute sections (works in both layouts)
+        for (let i = 0; i < 5; i++) {
+            await page.evaluate(() => {
+                const containers = ['.m6QErb.DxyBCb', 'div[role="main"]'];
+                for (const sel of containers) {
+                    const el = document.querySelector(sel);
+                    if (el && el.scrollHeight > el.clientHeight) {
+                        el.scrollTo(0, el.scrollHeight);
+                        return;
+                    }
+                }
+                window.scrollTo(0, document.body.scrollHeight);
+            });
+            await sleep(800);
         }
 
         const attributes = {};
