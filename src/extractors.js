@@ -363,6 +363,28 @@ export async function extractRatingsAndReviews(page, log, deepScrape = false) {
                     }
                 }
 
+                // List of replied reviews (author + date + rating + snippet of reply)
+                result.reviewsMeta.repliedReviews = result.reviews
+                    .filter((r) => r.ownerReplied)
+                    .map((r) => ({
+                        author: r.author,
+                        rating: r.rating,
+                        date: r.date,
+                        reviewSnippet: r.text?.substring(0, 80) || null,
+                        replySnippet: r.ownerResponseText?.substring(0, 80) || null,
+                        replyDate: r.ownerResponseDate,
+                    }));
+
+                // List of unreplied reviews (author + date + rating — these need attention)
+                result.reviewsMeta.unrepliedReviews = result.reviews
+                    .filter((r) => !r.ownerReplied)
+                    .map((r) => ({
+                        author: r.author,
+                        rating: r.rating,
+                        date: r.date,
+                        reviewSnippet: r.text?.substring(0, 80) || null,
+                    }));
+
                 delete result.reviews._meta;
                 log.info(`Reviews: ${result.reviewsMeta.reviewsExtracted}/${result.reviewsMeta.totalReviewsOnProfile} extracted (${result.reviewsMeta.gotAllReviews ? 'COMPLETE' : result.reviewsMeta.missingReviews + ' MISSING'}) | Replies: ${withReply}/${result.reviews.length} (${replyRatePercent}%)`);
             }
@@ -583,6 +605,7 @@ async function extractDetailedReviews(page, log) {
                         date,
                         isEdited,
                         text,
+                        ownerReplied: !!ownerResponseText,
                         ownerResponseText,
                         ownerResponseDate,
                         likesCount,
