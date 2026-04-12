@@ -714,26 +714,70 @@ async function extractPhotoGallery(page, log) {
 
                     // Extract uploader name and date from the photo detail overlay
                     const photoMeta = await page.evaluate(() => {
-                        const metaSelectors = [
+                        let uploader = null;
+                        let date = null;
+
+                        // Strategy 1: Look for the photo info header block
+                        // Format can be: "BusinessName\nPhoto - Apr 2026" (two lines)
+                        // Or: "UserName · 4 days ago" (dot-separated)
+                        const headerSelectors = [
                             '.fCpYHe', '.ZProGe', '.qCHGyb', '.T6pBCe',
                             'div[jsaction*="photo"] header', '.lbkBkb',
                         ];
-                        for (const sel of metaSelectors) {
+                        for (const sel of headerSelectors) {
                             const el = document.querySelector(sel);
-                            if (el) {
-                                const text = el.textContent?.trim() || '';
+                            if (!el) continue;
+                            const text = el.textContent?.trim() || '';
+
+                            // Try dot separator first: "Name · 4 days ago"
+                            if (text.includes('·')) {
                                 const parts = text.split('·').map((s) => s.trim());
                                 if (parts.length >= 2) {
-                                    return { uploader: parts[0], date: parts[1] };
+                                    uploader = parts[0];
+                                    date = parts[1];
+                                    break;
                                 }
                             }
+
+                            // Try "Photo - Mon YYYY" pattern (exact date from Google)
+                            const photoDateMatch = text.match(/Photo\s*[-–]\s*(.+)/i);
+                            if (photoDateMatch) {
+                                date = photoDateMatch[1].trim();
+                                // Uploader is the text before "Photo -"
+                                const idx = text.toLowerCase().indexOf('photo');
+                                if (idx > 0) {
+                                    uploader = text.substring(0, idx).trim();
+                                }
+                                break;
+                            }
+
+                            // Try multiline: first child = uploader, last child or sibling = date
+                            const children = el.children;
+                            if (children.length >= 2) {
+                                uploader = children[0]?.textContent?.trim() || null;
+                                date = children[children.length - 1]?.textContent?.trim() || null;
+                                if (date) break;
+                            }
                         }
-                        const uploaderEl = document.querySelector('.Aq14fc span, .fCpYHe span:first-child');
-                        const dateEl = document.querySelector('.fCpYHe .rsqaWe, .dehysf, span[aria-label*="ago"]');
-                        return {
-                            uploader: uploaderEl?.textContent?.trim() || null,
-                            date: dateEl?.textContent?.trim() || null,
-                        };
+
+                        // Strategy 2: Separate element selectors
+                        if (!uploader) {
+                            const uploaderEl = document.querySelector('.Aq14fc span, .fCpYHe span:first-child, .ZProGe a');
+                            uploader = uploaderEl?.textContent?.trim() || null;
+                        }
+                        if (!date) {
+                            const dateEl = document.querySelector('.fCpYHe .rsqaWe, .dehysf, span[aria-label*="ago"]');
+                            date = dateEl?.textContent?.trim() || null;
+                        }
+
+                        // Strategy 3: Check for "Image capture: Mon YYYY" at the bottom
+                        if (!date) {
+                            const allText = document.body.innerText || '';
+                            const captureMatch = allText.match(/Image capture[:\s]*([A-Za-z]+\s+\d{4})/i);
+                            if (captureMatch) date = captureMatch[1].trim();
+                        }
+
+                        return { uploader, date };
                     });
 
                     if (photoMeta.date || photoMeta.uploader) {
