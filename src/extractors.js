@@ -20,6 +20,7 @@ export async function extractCoreInfo(page, log) {
         latitude: null,
         longitude: null,
         phone: null,
+        phones: [],
         website: null,
         googleMapsUrl: null,
         menuUrl: null,
@@ -76,10 +77,19 @@ export async function extractCoreInfo(page, log) {
             Object.assign(result, parsed);
         }
 
-        // Phone
-        const phoneText = await resolveSelectorText(page, SELECTORS.placeDetail.phone, { log });
-        if (phoneText) {
-            result.phone = phoneText.replace(/Phone:\s*/i, '').trim();
+        // Phone(s) — extract ALL phone numbers
+        const phoneEls = await resolveSelectorAll(page, SELECTORS.placeDetail.phone, { log });
+        if (phoneEls.length > 0) {
+            for (const phoneEl of phoneEls) {
+                try {
+                    const text = await phoneEl.evaluate((el) => el.textContent?.trim() || null);
+                    if (text) {
+                        const cleaned = text.replace(/Phone:\s*/i, '').trim();
+                        if (cleaned) result.phones.push(cleaned);
+                    }
+                } catch { /* skip */ }
+            }
+            result.phone = result.phones[0] || null; // Primary phone for backwards compat
         }
 
         // Website
@@ -377,15 +387,18 @@ async function extractDetailedReviews(page, log) {
         // Scroll to load reviews (up to 100)
         await scrollReviewsPanel(page, log, 100);
 
-        // Expand truncated review texts
-        const moreButtons = await page.$$(SELECTORS.placeDetail.reviewMoreButton.primary);
-        for (const btn of moreButtons) {
-            try {
-                await btn.click();
-                await sleep(300);
-            } catch {
-                // Button may have been removed
+        // Expand ALL truncated review texts BEFORE extraction
+        // Click all "More" buttons multiple times (new ones appear as we scroll)
+        for (let expandPass = 0; expandPass < 3; expandPass++) {
+            const moreButtons = await page.$$(SELECTORS.placeDetail.reviewMoreButton.primary);
+            if (moreButtons.length === 0) break;
+            for (const btn of moreButtons) {
+                try {
+                    await btn.click();
+                    await sleep(200);
+                } catch { /* button may already be expanded */ }
             }
+            await sleep(500);
         }
 
         // Extract individual reviews
@@ -649,7 +662,7 @@ async function extractPhotoGallery(page, log) {
                     await sleep(1500);
 
                     // Scroll to load photos in this category
-                    for (let i = 0; i < 3; i++) {
+                    for (let i = 0; i < 5; i++) {
                         await page.evaluate(() => {
                             const s = document.querySelector('.m6QErb.DxyBCb') || document.querySelector('div[role="main"]');
                             if (s) s.scrollTo(0, s.scrollHeight);
@@ -660,7 +673,7 @@ async function extractPhotoGallery(page, log) {
                     // Extract photos for this category
                     const imgEls = await resolveSelectorAll(page, SELECTORS.placeDetail.photoGalleryImage, { log });
                     const urls = [];
-                    for (const img of imgEls.slice(0, 20)) {
+                    for (const img of imgEls.slice(0, 50)) {
                         try {
                             const src = await img.evaluate((el) => {
                                 const s = el.src || el.getAttribute('data-src') || el.getAttribute('src') || '';
@@ -689,7 +702,7 @@ async function extractPhotoGallery(page, log) {
 
             const imgEls = await resolveSelectorAll(page, SELECTORS.placeDetail.photoGalleryImage, { log });
             const urls = [];
-            for (const img of imgEls.slice(0, 60)) {
+            for (const img of imgEls.slice(0, 100)) {
                 try {
                     const src = await img.evaluate((el) => {
                         const s = el.src || el.getAttribute('data-src') || el.getAttribute('src') || '';
@@ -724,6 +737,15 @@ export async function extractAttributes(page, log) {
         if (aboutTab) {
             await aboutTab.click();
             await sleep(2000);
+
+            // Scroll down within the About panel to load all attribute sections
+            for (let i = 0; i < 3; i++) {
+                await page.evaluate(() => {
+                    const panel = document.querySelector('.m6QErb.DxyBCb') || document.querySelector('div[role="main"]');
+                    if (panel) panel.scrollTo(0, panel.scrollHeight);
+                });
+                await sleep(800);
+            }
         }
 
         const attributes = {};
@@ -739,12 +761,11 @@ export async function extractAttributes(page, log) {
                         el.querySelector('h2') || el.querySelector('h4');
                     const title = titleEl?.textContent?.trim() || 'Other';
 
-                    // Find all chips
+                    // Find all chips — include BOTH available and unavailable with status
                     const chips = [];
                     const chipEls = el.querySelectorAll('.CK16pd, .Ufn4mc, li.hpLkke');
                     for (const chip of chipEls) {
                         const text = chip.textContent?.trim();
-                        // Check if it's a "not available" chip (usually has strikethrough or specific class)
                         const isAvailable = !chip.classList.contains('hgKrVf') &&
                             !chip.querySelector('.hgKrVf');
                         if (text) {
@@ -756,9 +777,11 @@ export async function extractAttributes(page, log) {
                 });
 
                 if (sectionData.chips.length > 0) {
-                    attributes[sectionData.title] = sectionData.chips
-                        .filter((c) => c.available)
-                        .map((c) => c.text);
+                    // Keep ALL attributes with their availability status
+                    attributes[sectionData.title] = sectionData.chips.map((c) => ({
+                        name: c.text,
+                        available: c.available,
+                    }));
                 }
             } catch {
                 // Skip malformed section
@@ -934,24 +957,67 @@ export async function extractQA(page, log) {
         if (qaBtn) {
             await qaBtn.click();
             await sleep(2000);
+
+            // Scroll to load more Q&A
+            for (let i = 0; i < 3; i++) {
+                await page.evaluate(() => {
+                    const panel = document.querySelector('.m6QErb.DxyBCb') || document.querySelector('div[role="main"]');
+                    if (panel) panel.scrollTo(0, panel.scrollHeight);
+                });
+                await sleep(1000);
+            }
         }
 
         const questionEls = await resolveSelectorAll(page, SELECTORS.placeDetail.qaQuestionItem, { log });
         if (questionEls.length === 0) return result;
 
         const qna = [];
-        for (const qEl of questionEls.slice(0, 20)) {
+        for (const qEl of questionEls.slice(0, 50)) {
             try {
                 const data = await qEl.evaluate((el) => {
                     const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
+
+                    // Question parts
+                    const questionText = getText('.JgzqYd span') || getText('.PuaHbe') || getText('.tL9Q4c');
+
+                    // Question author — look for the first link/button with a person name
+                    const qAuthorEl = el.querySelector('.LIi3ob') || el.querySelector('.GSM50');
+                    const questionAuthor = qAuthorEl?.textContent?.trim() || getText('.cIbSTd') || null;
+
+                    // Question date
+                    const questionDate = getText('.JKXGK') || getText('.dehysf') || null;
+
+                    // Upvotes
+                    const upvoteText = getText('.XkSzU') || getText('.LIi3ob + span') || '0';
+                    const upvotes = parseInt(upvoteText.replace(/[^0-9]/g, '') || '0', 10);
+
+                    // Answer — usually a child container
+                    const answerContainer = el.querySelector('.iNTye') || el.querySelector('.aVbfBd');
+                    let answerText = null;
+                    let answerAuthor = null;
+                    let answerDate = null;
+
+                    if (answerContainer) {
+                        answerText = answerContainer.querySelector('span')?.textContent?.trim() || null;
+                        // Answer author is typically in a separate element within the answer block
+                        const aAuthorEl = answerContainer.querySelector('.GSM50') ||
+                            answerContainer.querySelector('.LIi3ob') ||
+                            answerContainer.querySelector('.KMkiLb');
+                        answerAuthor = aAuthorEl?.textContent?.trim() || null;
+                        // Answer date
+                        const aDateEl = answerContainer.querySelector('.dehysf') ||
+                            answerContainer.querySelector('.JKXGK');
+                        answerDate = aDateEl?.textContent?.trim() || null;
+                    }
+
                     return {
-                        questionText: getText('.JgzqYd span') || getText('.PuaHbe'),
-                        questionAuthor: getText('.cIbSTd') || null,
-                        questionDate: getText('.JKXGK') || null,
-                        upvotes: parseInt(getText('.XkSzU') || '0', 10) || 0,
-                        answerText: getText('.iNTye span') || null,
-                        answerAuthor: getText('.KMkiLb') || null,
-                        answerDate: null,
+                        questionText,
+                        questionAuthor,
+                        questionDate,
+                        upvotes,
+                        answerText,
+                        answerAuthor,
+                        answerDate,
                     };
                 });
                 qna.push(data);
@@ -1118,20 +1184,21 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         qa = await extractQA(page, log);
     }
 
+    // Build extraction completeness summary
+    const allFields = { ...coreInfo, ...ratings, ...hours, ...photos, ...attributes, ...popularTimes, ...desc, ...related, ...posts, ...products, ...services, ...qa };
+    const fieldCount = Object.keys(allFields).length;
+    const populatedCount = Object.values(allFields).filter((v) =>
+        v !== null && v !== undefined && v !== false && !(Array.isArray(v) && v.length === 0),
+    ).length;
+
     return {
-        ...coreInfo,
-        ...ratings,
-        ...hours,
-        ...photos,
-        ...attributes,
-        ...popularTimes,
-        ...desc,
-        ...related,
-        ...posts,
-        ...products,
-        ...services,
-        ...qa,
+        ...allFields,
         selectorVersion: SELECTOR_VERSION,
+        extractionCompleteness: {
+            totalFields: fieldCount,
+            populatedFields: populatedCount,
+            completenessPercent: Math.round((populatedCount / fieldCount) * 100),
+        },
         scrapedAt: new Date().toISOString(),
     };
 }
