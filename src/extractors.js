@@ -373,291 +373,157 @@ async function extractDetailedReviews(page, log) {
     const reviews = [];
 
     try {
-        const currentUrl = page.url();
-        const businessName = await page.$eval('h1', (el) => el.textContent?.trim()).catch(() => null);
+        // ===== PRIMARY: Google Maps Reviews Tab =====
+        // [data-review-id] elements are the most reliable selector (22 found in live test)
+        log.info('Extracting reviews from Google Maps Reviews tab...');
 
-        // ===== PRIMARY: KP Reviews Panel via Google Search =====
-        // This opens reviews in an iframe that Puppeteer can access via page.frames()
-        if (businessName) {
-            log.info('Extracting reviews via Knowledge Panel (Google Search)...');
-            const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(businessName)}`;
-            await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-            await sleep(2500);
-
-            // Click "X Google reviews" link to open the reviews panel
-            await page.evaluate(() => {
-                const links = document.querySelectorAll('a');
-                for (const a of links) {
-                    const text = a.textContent?.trim() || '';
-                    if (text.includes('Google reviews') && text.match(/\d+/)) {
-                        a.click();
-                        return;
-                    }
-                }
-            });
-            await sleep(3000);
-
-            // Click "Newest" sort button inside the reviews panel
-            await page.evaluate(() => {
-                const btns = document.querySelectorAll('button, span[role="button"], div[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent?.trim() === 'Newest') { b.click(); return; }
-                }
-            });
+        // Step 1: Click Reviews tab
+        const reviewTab = await page.$('button.hh2c6[aria-label*="Reviews"]');
+        if (reviewTab) {
+            await reviewTab.click();
             await sleep(2000);
-
-            // Find the reviews iframe (Puppeteer can access cross-origin frames)
-            let reviewFrame = null;
-            const frames = page.frames();
-            for (const frame of frames) {
-                try {
-                    const hasReviews = await frame.evaluate(() => {
-                        return document.querySelectorAll('.jftiEf, [data-review-id], span[aria-label*="star"]').length > 0;
-                    }).catch(() => 0);
-                    if (hasReviews > 0) {
-                        reviewFrame = frame;
-                        break;
-                    }
-                } catch { /* skip inaccessible frames */ }
-            }
-
-            // If no iframe found, reviews might be in the main page
-            if (!reviewFrame) {
-                const mainPageReviews = await page.evaluate(() => {
-                    return document.querySelectorAll('span[aria-label*="star"]').length;
-                });
-                if (mainPageReviews > 0) reviewFrame = page.mainFrame();
-            }
-
-            if (reviewFrame) {
-                // Click "Newest" inside the frame too
-                await reviewFrame.evaluate(() => {
-                    const btns = document.querySelectorAll('button, span[role="button"], div[role="button"]');
-                    for (const b of btns) {
-                        if (b.textContent?.trim() === 'Newest') { b.click(); break; }
-                    }
-                }).catch(() => {});
-                await sleep(2000);
-
-                // Scroll to load all reviews in the frame
-                for (let i = 0; i < 30; i++) {
-                    const count = await reviewFrame.evaluate(() => {
-                        const reviews = document.querySelectorAll('.jftiEf, [data-review-id]');
-                        const scrollable = document.querySelector('.review-dialog-list, .m6QErb, [role="list"]') || document.documentElement;
-                        scrollable.scrollTo(0, scrollable.scrollHeight);
-                        return reviews.length;
-                    }).catch(() => 0);
-
-                    if (count >= 95) break; // All reviews loaded
-                    await sleep(1000);
-                }
-
-                // Expand all "More" buttons
-                await reviewFrame.evaluate(() => {
-                    const btns = document.querySelectorAll('button.w8nwRe, button[aria-label="See more"], [data-expandable-section] button');
-                    btns.forEach(b => { try { b.click(); } catch {} });
-                }).catch(() => {});
-                await sleep(1000);
-
-                // Extract ALL reviews from the frame
-                const extractedReviews = await reviewFrame.evaluate(() => {
-                    const results = [];
-                    // Try multiple selectors for review containers
-                    const reviewEls = document.querySelectorAll('.jftiEf, [data-review-id], .gws-localreviews__google-review');
-
-                    for (const el of reviewEls) {
-                        try {
-                            const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
-
-                            // Author name
-                            const authorEl = el.querySelector('.d4r55, .TSUbDb a, .reviewer-name');
-                            const author = authorEl?.textContent?.trim() || null;
-
-                            // Author profile URL
-                            const authorLink = el.querySelector('a[href*="contrib"], .TSUbDb a');
-                            const authorUrl = authorLink?.href || null;
-
-                            // Author review count + photo count
-                            const authorInfoEl = el.querySelector('.RfnDt, .reviewer-info, .A503be');
-                            const authorInfoText = authorInfoEl?.textContent?.trim() || '';
-                            const reviewCountMatch = authorInfoText.match(/(\d+)\s*review/i);
-                            const photoCountMatch = authorInfoText.match(/(\d+)\s*photo/i);
-                            const authorReviewCount = reviewCountMatch ? parseInt(reviewCountMatch[1], 10) : null;
-                            const authorPhotoCount = photoCountMatch ? parseInt(photoCountMatch[1], 10) : null;
-
-                            // Local Guide
-                            const isLocalGuide = authorInfoText.toLowerCase().includes('local guide');
-                            let localGuideLevel = null;
-                            const lvlMatch = authorInfoText.match(/Level\s*(\d+)/i);
-                            if (lvlMatch) localGuideLevel = parseInt(lvlMatch[1], 10);
-
-                            // Rating
-                            const ratingEl = el.querySelector('.kvMYJc, span[role="img"][aria-label*="star"]');
-                            let rating = null;
-                            if (ratingEl) {
-                                const ariaLabel = ratingEl.getAttribute('aria-label') || '';
-                                const m = ariaLabel.match(/(\d)/);
-                                if (m) rating = parseInt(m[1], 10);
-                            }
-
-                            // Date
-                            const dateEl = el.querySelector('.rsqaWe, .dehysf, .DU9Pgb');
-                            const date = dateEl?.textContent?.trim() || null;
-                            const isEdited = date?.toLowerCase().includes('edited') || false;
-
-                            // Review text
-                            const textEl = el.querySelector('span.wiI7pd, .review-full-text, .Jtu6Td');
-                            const text = textEl?.textContent?.trim() || null;
-
-                            // Owner response
-                            const ownerBlock = el.querySelector('.CDe7pd, .owner-response');
-                            let ownerResponseText = null;
-                            let ownerResponseDate = null;
-                            if (ownerBlock) {
-                                ownerResponseText = ownerBlock.querySelector('.wiI7pd, span')?.textContent?.trim() || null;
-                                ownerResponseDate = ownerBlock.querySelector('.rsqaWe, .DU9Pgb')?.textContent?.trim() || null;
-                            }
-
-                            // Likes/reactions
-                            const likesEl = el.querySelector('button.GBkF3d span, .pkWtMe, [aria-label*="Like"] span');
-                            let likesCount = 0;
-                            if (likesEl) {
-                                const n = parseInt(likesEl.textContent?.trim(), 10);
-                                if (!isNaN(n)) likesCount = n;
-                            }
-
-                            // Review photos
-                            const photoEls = el.querySelectorAll('img[src*="googleusercontent"]');
-                            const reviewPhotos = Array.from(photoEls)
-                                .map(img => img.src)
-                                .filter(src => src?.includes('googleusercontent'));
-
-                            results.push({
-                                author,
-                                authorUrl,
-                                authorReviewCount,
-                                authorPhotoCount,
-                                isLocalGuide,
-                                localGuideLevel,
-                                rating,
-                                date,
-                                isEdited,
-                                text,
-                                ownerResponseText,
-                                ownerResponseDate,
-                                likesCount,
-                                reviewPhotos,
-                            });
-                        } catch {
-                            // Skip malformed review
-                        }
-                    }
-                    return results;
-                }).catch(() => []);
-
-                if (extractedReviews.length > 0) {
-                    reviews.push(...extractedReviews);
-                    log.info(`KP Reviews: extracted ${reviews.length} reviews from Knowledge Panel`);
-                }
-            }
-
-            // Navigate back to Maps
-            await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-            await sleep(1000);
         }
 
-        // ===== FALLBACK: Maps Reviews Panel =====
-        if (reviews.length === 0) {
-            log.info('KP reviews failed, falling back to Maps reviews panel...');
-
-            const { element: moreBtn } = await resolveSelector(page, SELECTORS.placeDetail.moreReviewsButton, { log });
-            if (moreBtn) {
-                await moreBtn.click();
+        // Step 2: Sort by Newest
+        const sortBtn = await page.$('button[data-value="Sort"], button[aria-label*="Sort"]');
+        if (sortBtn) {
+            await sortBtn.click();
+            await sleep(1000);
+            // Click "Newest" option (data-index="1")
+            const newestOpt = await page.$('[data-index="1"], [role="menuitemradio"]:nth-child(2)');
+            if (newestOpt) {
+                await newestOpt.click();
                 await sleep(2000);
             }
+        }
 
-            // Sort by newest
-            const { element: sortBtn } = await resolveSelector(page, SELECTORS.placeDetail.reviewsSortButton, { log });
-            if (sortBtn) {
-                await sortBtn.click();
-                await sleep(1000);
-                const { element: newestOpt } = await resolveSelector(page, SELECTORS.placeDetail.reviewsSortNewest, { log });
-                if (newestOpt) {
-                    await newestOpt.click();
-                    await sleep(2000);
-                }
+        // Step 3: Scroll to load ALL reviews
+        for (let i = 0; i < 50; i++) {
+            const currentCount = (await page.$$('[data-review-id]')).length;
+            if (currentCount >= 95) break; // All loaded
+
+            await page.evaluate(() => {
+                const scrollable = document.querySelector('.m6QErb.DxyBCb.kA9KIf.dS8AEf') ||
+                    document.querySelector('.m6QErb.DxyBCb') ||
+                    document.querySelector('div[role="main"]');
+                if (scrollable) scrollable.scrollTo(0, scrollable.scrollHeight);
+            });
+            await sleep(1200);
+
+            const newCount = (await page.$$('[data-review-id]')).length;
+            if (newCount === currentCount) {
+                // Stuck — try scrolling 2 more times then give up
+                await sleep(1500);
+                const finalCount = (await page.$$('[data-review-id]')).length;
+                if (finalCount === currentCount) break;
             }
+        }
 
-            await scrollReviewsPanel(page, log, 100);
-
-            // Expand truncated texts
-            for (let expandPass = 0; expandPass < 3; expandPass++) {
-                const moreButtons = await page.$$(SELECTORS.placeDetail.reviewMoreButton.primary);
-                if (moreButtons.length === 0) break;
-                for (const btn of moreButtons) {
-                    try { await btn.click(); await sleep(200); } catch { /* */ }
-                }
-                await sleep(500);
+        // Step 4: Expand all "More" buttons
+        for (let pass = 0; pass < 3; pass++) {
+            const moreButtons = await page.$$('button.w8nwRe, button[aria-label="See more"]');
+            if (moreButtons.length === 0) break;
+            for (const btn of moreButtons) {
+                try { await btn.click(); await sleep(150); } catch { /* */ }
             }
+            await sleep(500);
+        }
 
-            const reviewEls = await resolveSelectorAll(page, SELECTORS.placeDetail.reviewItem, { log });
-            for (const reviewEl of reviewEls.slice(0, 100)) {
+        // Step 5: Extract ALL reviews from [data-review-id] elements
+        const mapsReviews = await page.evaluate(() => {
+            const results = [];
+            const reviewEls = document.querySelectorAll('[data-review-id]');
+
+            for (const el of reviewEls) {
                 try {
-                    const review = await reviewEl.evaluate((el) => {
-                        const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
-                        const getHref = (sel) => el.querySelector(sel)?.href || null;
+                    const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
 
-                        const ratingEl = el.querySelector('.kvMYJc') || el.querySelector('span[role="img"]');
-                        let stars = null;
-                        if (ratingEl) {
-                            const m = (ratingEl.getAttribute('aria-label') || '').match(/(\d)/);
-                            if (m) stars = parseInt(m[1], 10);
-                        }
+                    // Author
+                    const authorEl = el.querySelector('.d4r55, .WNxzHc a, .TSUbDb a');
+                    const author = authorEl?.textContent?.trim() || null;
+                    const authorUrl = (el.querySelector('.WNxzHc a, a[href*="contrib"]'))?.href || null;
 
-                        const guideBadge = el.querySelector('.RfnDt span') || el.querySelector('.QV3IV');
-                        let isLocalGuide = false;
-                        let localGuideLevel = null;
-                        if (guideBadge) {
-                            isLocalGuide = true;
-                            const lvl = guideBadge.textContent?.match(/Level\s*(\d+)/i);
-                            if (lvl) localGuideLevel = parseInt(lvl[1], 10);
-                        }
+                    // Author info (review count, photo count, Local Guide)
+                    const infoEl = el.querySelector('.RfnDt, .A503be');
+                    const infoText = infoEl?.textContent?.trim() || '';
+                    const revCountMatch = infoText.match(/(\d+)\s*review/i);
+                    const photoCountMatch = infoText.match(/(\d+)\s*photo/i);
+                    const isLocalGuide = infoText.toLowerCase().includes('local guide');
+                    let localGuideLevel = null;
+                    const lvlMatch = infoText.match(/Level\s*(\d+)/i);
+                    if (lvlMatch) localGuideLevel = parseInt(lvlMatch[1], 10);
 
-                        const photoEls = el.querySelectorAll('.KtCyie button img, img[src*="googleusercontent"]');
-                        const photos = Array.from(photoEls).map(i => i.src).filter(s => s?.includes('googleusercontent'));
+                    // Rating
+                    const ratingEl = el.querySelector('.kvMYJc, span[role="img"][aria-label*="star"]');
+                    let rating = null;
+                    if (ratingEl) {
+                        const m = (ratingEl.getAttribute('aria-label') || '').match(/(\d)/);
+                        if (m) rating = parseInt(m[1], 10);
+                    }
 
-                        const likesEl = el.querySelector('button.GBkF3d span') || el.querySelector('span.pkWtMe');
-                        let likes = 0;
-                        if (likesEl) { const n = parseInt(likesEl.textContent?.trim(), 10); if (!isNaN(n)) likes = n; }
+                    // Date
+                    const dateEl = el.querySelector('.rsqaWe, .dehysf, .DU9Pgb');
+                    const date = dateEl?.textContent?.trim() || null;
+                    const isEdited = date?.toLowerCase().includes('edited') || false;
 
-                        const ownerRespText = getText('.CDe7pd .wiI7pd') || getText('.ODSEW .wiI7pd');
-                        const ownerRespDate = getText('.CDe7pd .rsqaWe') || getText('.ODSEW .DU9Pgb');
-                        const dateText = getText('.rsqaWe') || getText('.DU9Pgb');
+                    // Review text (full, after "More" expansion)
+                    const textEl = el.querySelector('span.wiI7pd, .MyEned span.wiI7pd');
+                    const text = textEl?.textContent?.trim() || null;
 
-                        return {
-                            author: getText('.d4r55') || getText('.WNxzHc'),
-                            authorUrl: getHref('.WNxzHc a') || getHref('button.WEBjve'),
-                            authorReviewCount: null,
-                            authorPhotoCount: null,
-                            isLocalGuide,
-                            localGuideLevel,
-                            rating: stars,
-                            date: dateText,
-                            isEdited: dateText?.toLowerCase().includes('edited') || false,
-                            text: getText('span.wiI7pd') || getText('.MyEned span'),
-                            ownerResponseText: ownerRespText,
-                            ownerResponseDate: ownerRespDate,
-                            likesCount: likes,
-                            reviewPhotos: photos,
-                        };
+                    // Owner response
+                    const ownerBlock = el.querySelector('.CDe7pd');
+                    let ownerResponseText = null;
+                    let ownerResponseDate = null;
+                    if (ownerBlock) {
+                        ownerResponseText = ownerBlock.querySelector('.wiI7pd, span')?.textContent?.trim() || null;
+                        ownerResponseDate = ownerBlock.querySelector('.rsqaWe, .DU9Pgb')?.textContent?.trim() || null;
+                    }
+
+                    // Likes
+                    const likesEl = el.querySelector('button.GBkF3d span, span.pkWtMe');
+                    let likesCount = 0;
+                    if (likesEl) {
+                        const n = parseInt(likesEl.textContent?.trim(), 10);
+                        if (!isNaN(n)) likesCount = n;
+                    }
+
+                    // Review photos
+                    const photoEls = el.querySelectorAll('img[src*="googleusercontent"]');
+                    const reviewPhotos = Array.from(photoEls)
+                        .map(img => img.src)
+                        .filter(s => s?.includes('googleusercontent'));
+
+                    results.push({
+                        reviewId: el.getAttribute('data-review-id'),
+                        author,
+                        authorUrl,
+                        authorReviewCount: revCountMatch ? parseInt(revCountMatch[1], 10) : null,
+                        authorPhotoCount: photoCountMatch ? parseInt(photoCountMatch[1], 10) : null,
+                        isLocalGuide,
+                        localGuideLevel,
+                        rating,
+                        date,
+                        isEdited,
+                        text,
+                        ownerResponseText,
+                        ownerResponseDate,
+                        likesCount,
+                        reviewPhotos,
                     });
-                    reviews.push(review);
-                } catch (err) {
-                    log.warning(`Failed to extract review: ${err.message}`);
-                }
+                } catch { /* skip bad review */ }
             }
+            return results;
+        });
 
-            await page.keyboard.press('Escape');
+        if (mapsReviews.length > 0) {
+            reviews.push(...mapsReviews);
+            log.info(`Maps Reviews: extracted ${reviews.length} reviews`);
+        }
+
+        // Go back to Overview tab
+        const overviewTab = await page.$('button.hh2c6[aria-label*="Overview"]');
+        if (overviewTab) {
+            await overviewTab.click();
             await sleep(1000);
         }
     } catch (err) {
