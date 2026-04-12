@@ -2394,42 +2394,201 @@ export async function extractWebsiteInfo(page, log, websiteUrl) {
 // ========== MASTER ORCHESTRATOR ==========
 
 export async function extractAllPlaceData(page, log, deepScrape = false) {
-    // Save the Maps place URL — we'll need to come back after navigating away
+    // Save the Maps place URL
     const mapsPlaceUrl = page.url();
 
-    // ===== PHASE 1: Extract everything from the Maps place page (NO navigation) =====
-    log.info('Phase 1: Extracting from Maps place page...');
+    // ===== PHASE 1: Maps basic info (stripped page but gives coords, phone, website) =====
+    log.info('Phase 1: Extracting basic info from Maps...');
     const coreInfo = await extractCoreInfo(page, log);
-    const ratings = await extractRatingsAndReviews(page, log, deepScrape);
     const hours = await extractHours(page, log);
-    const attributes = await extractAttributes(page, log);
-    const popularTimes = await extractPopularTimes(page, log);
-    const desc = await extractDescription(page, log);
-    const related = await extractRelatedPlaces(page, log);
-    const posts = await extractPosts(page, log);
-    const products = await extractProducts(page, log);
-    const services = await extractServices(page, log);
     const profileClaimed = await extractProfileClaimed(page, log);
 
-    let qa = { qna: null };
-    if (deepScrape) {
-        qa = await extractQA(page, log);
+    // Try extracting what we can from Maps (these may be empty in stripped layout)
+    const ratings = await extractRatingsAndReviews(page, log, false); // Never deep scrape on Maps
+    const photos = await extractPhotos(page, log, false); // Basic photo info only
+    const popularTimes = await extractPopularTimes(page, log);
+
+    // ===== PHASE 2: Google Search KP — PRIMARY data source =====
+    log.info('Phase 2: Extracting from Google Search Knowledge Panel...');
+
+    // KP extraction: description, social profiles, third-party ratings, posts
+    let knowledgePanel = {
+        description: null, descriptionLength: 0, socialProfiles: [], thirdPartyRatings: [],
+        kpPosts: [], kpReviewSnippets: [], kpBusyness: null, kpAppointmentUrl: null,
+    };
+    if (coreInfo.name) {
+        knowledgePanel = await extractFullKnowledgePanel(page, log, coreInfo.name);
     }
 
-    // ===== PHASE 2: Photos (may navigate to gallery — still on Maps) =====
-    log.info('Phase 2: Extracting photos...');
-    const photos = await extractPhotos(page, log, deepScrape);
+    // Use KP description as primary
+    let desc = { description: knowledgePanel.description, fromTheBusiness: null, identifiesAs: [] };
 
-    // Navigate back to Maps place page before Phase 3
-    try {
-        await page.goto(mapsPlaceUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await sleep(2000);
-    } catch { /* best effort */ }
+    // KP Reviews — deep scrape reviews from Google Search reviews panel
+    if (deepScrape && coreInfo.name) {
+        log.info('Phase 2b: Extracting reviews from KP...');
+        // Navigate to Google Search and click reviews
+        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(coreInfo.name)}`;
+        try {
+            await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await sleep(2000);
 
-    // ===== PHASE 3: Navigations away from Maps (website, KP, contributor page) =====
-    log.info('Phase 3: External navigations (website, KP, owner photos)...');
+            // Click "X Google reviews" link
+            const clickedReviews = await page.evaluate(() => {
+                const links = document.querySelectorAll('a');
+                for (const a of links) {
+                    if (a.textContent?.includes('Google reviews') && a.textContent?.match(/\d+/)) {
+                        a.click();
+                        return true;
+                    }
+                }
+                return false;
+            });
 
-    // Website speed & schema check
+            if (clickedReviews) {
+                await sleep(3000);
+
+                // Click "Newest" sort
+                await page.evaluate(() => {
+                    const btns = document.querySelectorAll('button, div[role="button"]');
+                    for (const b of btns) {
+                        if (b.textContent?.trim() === 'Newest') { b.click(); return; }
+                    }
+                });
+                await sleep(2000);
+
+                // Find the reviews iframe
+                let reviewFrame = null;
+                for (const frame of page.frames()) {
+                    try {
+                        const count = await frame.evaluate(() =>
+                            document.querySelectorAll('.jftiEf, [data-review-id]').length
+                        ).catch(() => 0);
+                        if (count > 0) { reviewFrame = frame; break; }
+                    } catch { /* skip */ }
+                }
+
+                if (reviewFrame) {
+                    log.info('Found review iframe! Scrolling to load all reviews...');
+
+                    // Scroll to load all reviews
+                    for (let i = 0; i < 50; i++) {
+                        const count = await reviewFrame.evaluate(() => {
+                            const els = document.querySelectorAll('.jftiEf, [data-review-id]');
+                            const scrollable = document.querySelector('.review-dialog-list, .m6QErb, [role="list"]') || document.documentElement;
+                            scrollable.scrollTo(0, scrollable.scrollHeight);
+                            return els.length;
+                        }).catch(() => 0);
+                        if (count >= (ratings.reviewCount || 200)) break;
+                        await sleep(1200);
+                        const newCount = await reviewFrame.evaluate(() =>
+                            document.querySelectorAll('.jftiEf, [data-review-id]').length
+                        ).catch(() => 0);
+                        if (newCount === count) {
+                            await sleep(1500);
+                            const finalCount = await reviewFrame.evaluate(() =>
+                                document.querySelectorAll('.jftiEf, [data-review-id]').length
+                            ).catch(() => 0);
+                            if (finalCount === count) break;
+                        }
+                    }
+
+                    // Expand all "More" buttons
+                    await reviewFrame.evaluate(() => {
+                        document.querySelectorAll('button.w8nwRe, button[aria-label="See more"]')
+                            .forEach(b => { try { b.click(); } catch {} });
+                    }).catch(() => {});
+                    await sleep(1000);
+
+                    // Extract reviews
+                    const kpReviews = await reviewFrame.evaluate(() => {
+                        const results = [];
+                        const els = document.querySelectorAll('.jftiEf, [data-review-id]');
+                        for (const el of els) {
+                            try {
+                                const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
+                                const ratingEl = el.querySelector('.kvMYJc, span[role="img"][aria-label*="star"]');
+                                let rating = null;
+                                if (ratingEl) {
+                                    const m = (ratingEl.getAttribute('aria-label') || '').match(/(\d)/);
+                                    if (m) rating = parseInt(m[1], 10);
+                                }
+                                const infoText = (el.querySelector('.RfnDt, .A503be'))?.textContent || '';
+                                const dateText = getText('.rsqaWe, .dehysf, .DU9Pgb');
+                                const ownerBlock = el.querySelector('.CDe7pd');
+                                results.push({
+                                    reviewId: el.getAttribute('data-review-id') || null,
+                                    author: getText('.d4r55, .TSUbDb a'),
+                                    authorUrl: el.querySelector('a[href*="contrib"]')?.href || null,
+                                    authorReviewCount: (infoText.match(/(\d+)\s*review/i) || [])[1] ? parseInt(RegExp.$1) : null,
+                                    authorPhotoCount: (infoText.match(/(\d+)\s*photo/i) || [])[1] ? parseInt(RegExp.$1) : null,
+                                    isLocalGuide: infoText.toLowerCase().includes('local guide'),
+                                    localGuideLevel: (infoText.match(/Level\s*(\d+)/i) || [])[1] ? parseInt(RegExp.$1) : null,
+                                    rating,
+                                    date: dateText,
+                                    isEdited: dateText?.toLowerCase().includes('edited') || false,
+                                    text: getText('span.wiI7pd, .review-full-text'),
+                                    ownerReplied: !!ownerBlock,
+                                    ownerResponseText: ownerBlock?.querySelector('.wiI7pd, span')?.textContent?.trim() || null,
+                                    ownerResponseDate: ownerBlock?.querySelector('.rsqaWe, .DU9Pgb')?.textContent?.trim() || null,
+                                    likesCount: parseInt(el.querySelector('button.GBkF3d span, .pkWtMe')?.textContent || '0') || 0,
+                                    reviewPhotos: Array.from(el.querySelectorAll('img[src*="googleusercontent"]')).map(i => i.src).filter(Boolean),
+                                });
+                            } catch { /* skip */ }
+                        }
+                        return results;
+                    }).catch(() => []);
+
+                    if (kpReviews.length > 0) {
+                        ratings.reviews = kpReviews;
+                        log.info(`KP Reviews: extracted ${kpReviews.length} reviews!`);
+
+                        // Build reviewsMeta
+                        const withReply = kpReviews.filter(r => r.ownerReplied).length;
+                        ratings.reviewsMeta = {
+                            totalReviewsOnProfile: ratings.reviewCount,
+                            reviewsExtracted: kpReviews.length,
+                            gotAllReviews: kpReviews.length >= (ratings.reviewCount || 0),
+                            newestReviewDate: kpReviews[0]?.date || null,
+                            oldestReviewDate: kpReviews[kpReviews.length - 1]?.date || null,
+                            missingReviews: Math.max(0, (ratings.reviewCount || 0) - kpReviews.length),
+                            ownerRepliedCount: withReply,
+                            ownerNotRepliedCount: kpReviews.length - withReply,
+                            ownerReplyRate: `${withReply}/${kpReviews.length}`,
+                            ownerReplyRatePercent: kpReviews.length > 0 ? Math.round((withReply / kpReviews.length) * 100) : 0,
+                            starBreakdown: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
+                            repliedReviews: kpReviews.filter(r => r.ownerReplied).map(r => ({
+                                author: r.author, rating: r.rating, date: r.date,
+                                reviewSnippet: r.text?.substring(0, 80), replySnippet: r.ownerResponseText?.substring(0, 80), replyDate: r.ownerResponseDate,
+                            })),
+                            unrepliedReviews: kpReviews.filter(r => !r.ownerReplied).map(r => ({
+                                author: r.author, rating: r.rating, date: r.date, reviewSnippet: r.text?.substring(0, 80),
+                            })),
+                        };
+                        for (const r of kpReviews) {
+                            if (r.rating >= 1 && r.rating <= 5) ratings.reviewsMeta.starBreakdown[r.rating]++;
+                        }
+                    }
+                } else {
+                    log.warning('Review iframe not found in KP');
+                }
+            }
+        } catch (err) {
+            log.warning(`KP review extraction failed: ${err.message}`);
+        }
+    }
+
+    // ===== PHASE 3: Owner photos (from contributor page) =====
+    let ownerPhotos = {
+        ownerPhotoCount: null, ownerVideoCount: null, ownerContributorId: null,
+        ownerContributorUrl: null, ownerAllPhotoUrls: [], ownerRecentPhotos: [],
+        ownerPhotosInLast30Days: 0, ownerLatestPhotoDate: null,
+    };
+    if (deepScrape && coreInfo.name) {
+        log.info('Phase 3: Extracting owner photos...');
+        ownerPhotos = await extractOwnerPhotos(page, log, coreInfo.name);
+    }
+
+    // ===== PHASE 4: Website check =====
     let websiteInfo = {
         websiteSpeed: null, websiteLoadTimeMs: null, websiteStatus: null,
         hasSchemaMarkup: false, schemaTypes: [], schemaDetails: null,
@@ -2438,29 +2597,17 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         isMobileFriendly: null,
     };
     if (coreInfo.website) {
+        log.info('Phase 4: Checking website speed & schema...');
         websiteInfo = await extractWebsiteInfo(page, log, coreInfo.website);
     }
 
-    // Knowledge Panel extraction (navigates to Google Search)
-    let knowledgePanel = {
-        description: null, socialProfiles: [], thirdPartyRatings: [], kpPosts: [], kpBusyness: null,
-    };
-    if (coreInfo.name) {
-        knowledgePanel = await extractFullKnowledgePanel(page, log, coreInfo.name);
-        if (!desc.description && knowledgePanel.description) {
-            desc.description = knowledgePanel.description;
-        }
-    }
-
-    // Owner photos (navigates to Google Search → KP → contributor page)
-    let ownerPhotos = {
-        ownerPhotoCount: null, ownerVideoCount: null, ownerContributorId: null,
-        ownerContributorUrl: null, ownerAllPhotoUrls: [], ownerRecentPhotos: [],
-        ownerPhotosInLast30Days: 0, ownerLatestPhotoDate: null,
-    };
-    if (deepScrape && coreInfo.name) {
-        ownerPhotos = await extractOwnerPhotos(page, log, coreInfo.name);
-    }
+    // Use empty defaults for fields Maps couldn't get (stripped layout)
+    const attributes = { attributes: null };
+    const related = { peopleAlsoSearchFor: [] };
+    const posts = { posts: null };
+    const products = { products: null };
+    const services = { services: null };
+    let qa = { qna: null };
 
     // Build raw data
     const allFields = {

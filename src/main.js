@@ -64,25 +64,16 @@ for (const url of placeUrls) {
 
 // ========== CONFIGURE CRAWLER ==========
 
-// RESIDENTIAL proxy — real home/office IPs, lowest chance of being blocked
-// $8/GB but Google serves FULL pages (tabs, reviews, attributes, everything)
+// BUYPROXIES94952 for Maps basic info (fast, cheap)
+// KP extraction navigates to Google Search from within the page — uses same proxy
 let proxyConfiguration = null;
 try {
     proxyConfiguration = await Actor.createProxyConfiguration({
-        groups: ['RESIDENTIAL'],
-        countryCode: 'US',
+        groups: ['BUYPROXIES94952'],
     });
-    log.info('Using RESIDENTIAL proxy (US) — $8/GB');
-} catch (err) {
-    log.warning(`Residential proxy failed: ${err.message} — trying datacenter`);
-    try {
-        proxyConfiguration = await Actor.createProxyConfiguration({
-            groups: ['BUYPROXIES94952'],
-        });
-        log.info('Fallback: BUYPROXIES94952 datacenter proxy');
-    } catch {
-        log.warning('No proxy available — running without proxy');
-    }
+    log.info('Using BUYPROXIES94952 proxy (27 USA IPs)');
+} catch {
+    log.warning('No proxy — running without proxy');
 }
 
 const crawler = new PuppeteerCrawler({
