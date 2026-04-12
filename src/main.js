@@ -1,5 +1,5 @@
 import { Actor } from 'apify';
-import { PuppeteerCrawler } from 'crawlee';
+import { PuppeteerCrawler, log } from 'crawlee';
 import puppeteerExtra from 'puppeteer-extra';
 import stealthPlugin from 'puppeteer-extra-plugin-stealth';
 
@@ -39,8 +39,8 @@ if (searchQueries.length === 0 && placeUrls.length === 0) {
     );
 }
 
-Actor.log.info(`Starting GBP Scraper — ${searchQueries.length} search queries, ${placeUrls.length} direct URLs`);
-Actor.log.info(`Settings: maxResults=${maxResults}, language=${language}, deepScrape=${deepScrape}, debugSelectors=${debugSelectors}`);
+log.info(`Starting GBP Scraper — ${searchQueries.length} search queries, ${placeUrls.length} direct URLs`);
+log.info(`Settings: maxResults=${maxResults}, language=${language}, deepScrape=${deepScrape}, debugSelectors=${debugSelectors}`);
 
 // ========== BUILD REQUEST LIST ==========
 
@@ -113,5 +113,5 @@ const crawler = new PuppeteerCrawler({
 await crawler.addRequests(requests);
 await crawler.run();
 
-Actor.log.info('Scraping complete.');
+log.info('Scraping complete.');
 await Actor.exit();
