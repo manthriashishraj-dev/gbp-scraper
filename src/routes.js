@@ -131,6 +131,121 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
         business.description = kp.description;
     }
 
+    // ===== STEP 3b: KP Reviews (if no reviews from API) =====
+    if (!reviews && deepScrape && (kp.description || kp.socialProfiles.length > 0)) {
+        // KP is working — try to get reviews from the KP review panel
+        log.info('Extracting reviews from KP...');
+        try {
+            // We're on the Google Search results page after KP extraction
+            // Click "X Google reviews" link
+            const clickedReviews = await page.evaluate(() => {
+                const links = document.querySelectorAll('a');
+                for (const a of links) {
+                    if (a.textContent?.includes('Google reviews') && a.textContent?.match(/\d+/)) {
+                        a.click();
+                        return true;
+                    }
+                }
+                return false;
+            });
+
+            if (clickedReviews) {
+                await sleep(3000);
+
+                // Click "Newest" sort
+                await page.evaluate(() => {
+                    const btns = document.querySelectorAll('button, div[role="button"]');
+                    for (const b of btns) {
+                        if (b.textContent?.trim() === 'Newest') { b.click(); return; }
+                    }
+                });
+                await sleep(2000);
+
+                // Find reviews iframe
+                let reviewFrame = null;
+                for (const frame of page.frames()) {
+                    try {
+                        const count = await frame.evaluate(() =>
+                            document.querySelectorAll('.jftiEf, [data-review-id]').length
+                        ).catch(() => 0);
+                        if (count > 0) { reviewFrame = frame; break; }
+                    } catch {}
+                }
+
+                if (reviewFrame) {
+                    log.info('Found review iframe! Loading reviews...');
+
+                    // Scroll to load reviews
+                    let prevCount = 0;
+                    let stuck = 0;
+                    for (let i = 0; i < 50; i++) {
+                        const count = await reviewFrame.evaluate(() => {
+                            const els = document.querySelectorAll('.jftiEf, [data-review-id]');
+                            const s = document.querySelector('.review-dialog-list, .m6QErb, [role="list"]') || document.documentElement;
+                            s.scrollTo(0, s.scrollHeight);
+                            return els.length;
+                        }).catch(() => 0);
+
+                        if (count >= (business.reviewCount || 200)) break;
+                        if (count === prevCount) { stuck++; if (stuck >= 5) break; } else { stuck = 0; }
+                        prevCount = count;
+                        await sleep(1200);
+                    }
+
+                    // Expand "More" buttons
+                    await reviewFrame.evaluate(() => {
+                        document.querySelectorAll('button.w8nwRe, button[aria-label="See more"]')
+                            .forEach(b => { try { b.click(); } catch {} });
+                    }).catch(() => {});
+                    await sleep(1000);
+
+                    // Extract reviews
+                    reviews = await reviewFrame.evaluate(() => {
+                        const results = [];
+                        const els = document.querySelectorAll('.jftiEf, [data-review-id]');
+                        for (const el of els) {
+                            try {
+                                const getText = (sel) => el.querySelector(sel)?.textContent?.trim() || null;
+                                const ratingEl = el.querySelector('.kvMYJc, span[role="img"][aria-label*="star"]');
+                                let rating = null;
+                                if (ratingEl) {
+                                    const m = (ratingEl.getAttribute('aria-label') || '').match(/(\d)/);
+                                    if (m) rating = parseInt(m[1], 10);
+                                }
+                                const ownerBlock = el.querySelector('.CDe7pd');
+                                const dateText = getText('.rsqaWe, .dehysf, .DU9Pgb');
+                                const infoText = (el.querySelector('.RfnDt, .A503be'))?.textContent || '';
+
+                                results.push({
+                                    author: getText('.d4r55, .TSUbDb a'),
+                                    authorUrl: el.querySelector('a[href*="contrib"]')?.href || null,
+                                    authorReviewCount: (infoText.match(/(\d+)\s*review/i) || [])[1] || null,
+                                    isLocalGuide: infoText.toLowerCase().includes('local guide'),
+                                    rating,
+                                    date: dateText,
+                                    isEdited: dateText?.toLowerCase().includes('edited') || false,
+                                    text: getText('span.wiI7pd, .review-full-text'),
+                                    ownerReplied: !!ownerBlock,
+                                    ownerResponseText: ownerBlock?.querySelector('.wiI7pd')?.textContent?.trim() || null,
+                                    ownerResponseDate: ownerBlock?.querySelector('.rsqaWe')?.textContent?.trim() || null,
+                                });
+                            } catch {}
+                        }
+                        return results;
+                    }).catch(() => []);
+
+                    if (reviews.length > 0) {
+                        log.info(`KP Reviews: extracted ${reviews.length} reviews!`);
+                    } else {
+                        reviews = null;
+                    }
+                }
+            }
+        } catch (err) {
+            log.warning(`KP review extraction: ${err.message}`);
+        }
+    }
+
     // ===== STEP 4: Website check =====
     let websiteInfo = null;
     if (business.website) {

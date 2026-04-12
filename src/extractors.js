@@ -1575,12 +1575,31 @@ export async function extractFullKnowledgePanel(page, log, businessName) {
 
     try {
         const currentUrl = page.url();
-        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(businessName)}`;
 
-        log.info(`Extracting Knowledge Panel from Google Search: "${businessName}"`);
+        log.info(`Extracting Knowledge Panel via search: "${businessName}"`);
 
-        await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await sleep(2500);
+        // INTERACTION BYPASS: Navigate to Google.com and TYPE the search
+        // instead of direct URL — Google trusts user-initiated searches more
+        await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await sleep(1500);
+
+        // Type in the search box like a real user
+        const searchBox = await page.$('input[name="q"], textarea[name="q"]');
+        if (searchBox) {
+            await searchBox.click();
+            await sleep(500);
+            // Type slowly like a human
+            await page.keyboard.type(businessName, { delay: 50 + Math.random() * 50 });
+            await sleep(500);
+            await page.keyboard.press('Enter');
+            await sleep(3000);
+        } else {
+            // Fallback: direct URL
+            await page.goto(`https://www.google.com/search?q=${encodeURIComponent(businessName)}`, {
+                waitUntil: 'domcontentloaded', timeout: 30000
+            });
+            await sleep(2500);
+        }
 
         // Step 1: Click "More" / "Show more" on description to get full text
         await page.evaluate(() => {

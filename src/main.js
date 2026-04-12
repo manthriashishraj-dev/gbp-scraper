@@ -87,15 +87,17 @@ const crawler = new PuppeteerCrawler({
         launcher: puppeteerExtra,
         launchOptions: {
             headless: 'new',
+            ignoreDefaultArgs: ['--enable-automation'], // Critical: hides "Chrome is being controlled"
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                // GPU enabled — Google Maps needs it for full rendering!
+                '--disable-infobars',
                 '--enable-gpu',
                 '--use-gl=egl',
                 '--enable-webgl',
                 '--window-size=1920,1080',
+                '--window-position=0,0',
                 '--disable-blink-features=AutomationControlled',
                 `--lang=${language}`,
             ],
@@ -109,13 +111,17 @@ const crawler = new PuppeteerCrawler({
 
     preNavigationHooks: [
         async ({ page }) => {
-            // Set a random user agent before each navigation
+            // CDP patch: hide navigator.webdriver on every new page
+            await page.evaluateOnNewDocument(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                // Also hide Chrome automation indicators
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                window.chrome = { runtime: {} };
+            });
+
             await page.setUserAgent(randomUserAgent());
-
-            // Set viewport to full HD — Google Maps hides data on smaller viewports!
             await page.setViewport({ width: 1920, height: 1080 });
-
-            // Set accept-language header
             await page.setExtraHTTPHeaders({
                 'Accept-Language': `${language},en;q=0.9`,
             });
