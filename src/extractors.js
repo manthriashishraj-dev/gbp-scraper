@@ -2360,10 +2360,14 @@ export async function extractWebsiteInfo(page, log, websiteUrl) {
 // ========== MASTER ORCHESTRATOR ==========
 
 export async function extractAllPlaceData(page, log, deepScrape = false) {
+    // Save the Maps place URL — we'll need to come back after navigating away
+    const mapsPlaceUrl = page.url();
+
+    // ===== PHASE 1: Extract everything from the Maps place page (NO navigation) =====
+    log.info('Phase 1: Extracting from Maps place page...');
     const coreInfo = await extractCoreInfo(page, log);
     const ratings = await extractRatingsAndReviews(page, log, deepScrape);
     const hours = await extractHours(page, log);
-    const photos = await extractPhotos(page, log, deepScrape);
     const attributes = await extractAttributes(page, log);
     const popularTimes = await extractPopularTimes(page, log);
     const desc = await extractDescription(page, log);
@@ -2371,16 +2375,27 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
     const posts = await extractPosts(page, log);
     const products = await extractProducts(page, log);
     const services = await extractServices(page, log);
+    const profileClaimed = await extractProfileClaimed(page, log);
 
     let qa = { qna: null };
     if (deepScrape) {
         qa = await extractQA(page, log);
     }
 
-    // Profile claimed/verified
-    const profileClaimed = await extractProfileClaimed(page, log);
+    // ===== PHASE 2: Photos (may navigate to gallery — still on Maps) =====
+    log.info('Phase 2: Extracting photos...');
+    const photos = await extractPhotos(page, log, deepScrape);
 
-    // Website speed & schema check — navigate to the business website if it exists
+    // Navigate back to Maps place page before Phase 3
+    try {
+        await page.goto(mapsPlaceUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await sleep(2000);
+    } catch { /* best effort */ }
+
+    // ===== PHASE 3: Navigations away from Maps (website, KP, contributor page) =====
+    log.info('Phase 3: External navigations (website, KP, owner photos)...');
+
+    // Website speed & schema check
     let websiteInfo = {
         websiteSpeed: null, websiteLoadTimeMs: null, websiteStatus: null,
         hasSchemaMarkup: false, schemaTypes: [], schemaDetails: null,
@@ -2389,35 +2404,25 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         isMobileFriendly: null,
     };
     if (coreInfo.website) {
-        // Save current URL so we can go back
-        const gbpUrl = page.url();
         websiteInfo = await extractWebsiteInfo(page, log, coreInfo.website);
-        // Navigate back to GBP page (in case further extraction is needed)
-        try {
-            await page.goto(gbpUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-            await sleep(1000);
-        } catch {
-            // Best effort to go back
-        }
     }
 
-    // Knowledge Panel extraction — gets description, social profiles, third-party ratings, posts
+    // Knowledge Panel extraction (navigates to Google Search)
     let knowledgePanel = {
         description: null, socialProfiles: [], thirdPartyRatings: [], kpPosts: [], kpBusyness: null,
     };
     if (coreInfo.name) {
         knowledgePanel = await extractFullKnowledgePanel(page, log, coreInfo.name);
-        // If Maps didn't find description but KP did, use KP's
         if (!desc.description && knowledgePanel.description) {
             desc.description = knowledgePanel.description;
         }
     }
 
-    // Owner photos — from contributor profile (navigates to /maps/contrib/ID)
+    // Owner photos (navigates to Google Search → KP → contributor page)
     let ownerPhotos = {
         ownerPhotoCount: null, ownerVideoCount: null, ownerContributorId: null,
-        ownerContributorUrl: null, ownerRecentPhotos: [], ownerPhotosInLast30Days: 0,
-        ownerLatestPhotoDate: null,
+        ownerContributorUrl: null, ownerAllPhotoUrls: [], ownerRecentPhotos: [],
+        ownerPhotosInLast30Days: 0, ownerLatestPhotoDate: null,
     };
     if (deepScrape && coreInfo.name) {
         ownerPhotos = await extractOwnerPhotos(page, log, coreInfo.name);
