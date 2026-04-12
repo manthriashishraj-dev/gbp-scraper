@@ -76,8 +76,14 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
         const placeData = parsePreviewPlaceResponse(apiResponseText);
         if (placeData) {
             business = extractBusinessFromApi(placeData);
-            reviews = extractReviewsFromApi(placeData);
-            log.info(`API extraction: name=${business?.name?.substring(0, 40)}, rating=${business?.rating}, reviewCount=${business?.reviewCount}, reviews=${reviews?.length || 0}`);
+            // Reviews from API are only available in full browser — headless gets empty
+            // We'll get reviews from KP instead
+            const apiReviews = extractReviewsFromApi(placeData);
+            // Only use API reviews if they look valid (have real review IDs)
+            if (apiReviews && apiReviews.length > 0 && typeof apiReviews[0].reviewId === 'string' && apiReviews[0].reviewId.startsWith('Ci9')) {
+                reviews = apiReviews;
+            }
+            log.info(`API extraction: name=${business?.name?.substring(0, 40)}, rating=${business?.rating}, reviewCount=${business?.reviewCount}, apiReviews=${apiReviews?.length || 0} (valid: ${reviews?.length || 0})`);
         }
     } else {
         log.warning('No preview/place API response captured — falling back to DOM scraping');
