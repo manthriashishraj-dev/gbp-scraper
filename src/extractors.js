@@ -1158,10 +1158,13 @@ async function extractFromKnowledgePanel(page, log, businessName) {
 export async function extractFullKnowledgePanel(page, log, businessName) {
     const result = {
         description: null,
+        descriptionLength: 0,
         socialProfiles: [],
         thirdPartyRatings: [],
         kpPosts: [],
+        kpReviewSnippets: [],
         kpBusyness: null,
+        kpAppointmentUrl: null,
     };
 
     if (!businessName) return result;
@@ -1170,126 +1173,143 @@ export async function extractFullKnowledgePanel(page, log, businessName) {
         const currentUrl = page.url();
         const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(businessName)}`;
 
-        log.info(`Extracting Knowledge Panel data from Google Search: "${businessName}"`);
+        log.info(`Extracting Knowledge Panel from Google Search: "${businessName}"`);
         await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
         await sleep(2500);
 
+        // Step 1: Click "More" / "Show more" on description to get full text
+        await page.evaluate(() => {
+            const btns = document.querySelectorAll('[data-attrid="kc:/local:merchant_description"] button, [data-attrid="kc:/local:merchant_description"] [role="button"]');
+            for (const b of btns) {
+                if (b.textContent?.toLowerCase().includes('more') || b.getAttribute('aria-label')?.toLowerCase().includes('more')) {
+                    b.click();
+                    break;
+                }
+            }
+        });
+        await sleep(1000);
+
+        // Step 2: Extract everything from the KP
         const kpData = await page.evaluate(() => {
             const data = {
                 description: null,
+                descriptionLength: 0,
                 socialProfiles: [],
                 thirdPartyRatings: [],
                 kpPosts: [],
+                kpReviewSnippets: [],
                 kpBusyness: null,
+                kpAppointmentUrl: null,
             };
 
-            // === DESCRIPTION ===
-            // Try merchant_description first (this is the owner-written description)
+            // === FULL DESCRIPTION (after "More" click) ===
             const merchDesc = document.querySelector('[data-attrid="kc:/local:merchant_description"]');
             if (merchDesc) {
-                let text = merchDesc.textContent?.trim() || '';
-                // Remove the business name prefix and "From..." prefix
-                text = text.replace(/^From\s+.+?"/, '"').trim();
-                // Extract just the quoted description
-                const quoteMatch = text.match(/"([^"]+)/);
+                const fullText = merchDesc.textContent?.trim() || '';
+                // Extract text between first " and last " (the actual description)
+                const quoteMatch = fullText.match(/"([^"]+)/);
                 if (quoteMatch) {
-                    data.description = quoteMatch[1].replace(/\.\.\.\s*More$/, '').trim();
+                    data.description = quoteMatch[1].replace(/\.\.\.\s*(?:More|Show less)\s*$/i, '').trim();
                 } else {
-                    // Remove prefix labels
-                    text = text.replace(/^From\s+[^"]+/, '').replace(/^\s*"?/, '').replace(/"?\s*More\s*$/, '').trim();
-                    if (text.length > 10) data.description = text;
+                    // Remove "From BusinessName" prefix
+                    let cleaned = fullText.replace(/^From\s+[^"]*/, '').replace(/^\s*"?/, '').replace(/"?\s*(?:More|Show less)\s*$/i, '').trim();
+                    if (cleaned.length > 10) data.description = cleaned;
                 }
+                data.descriptionLength = data.description?.length || 0;
             }
-            // Fallback selectors
+            // Fallback: other description selectors
             if (!data.description) {
-                const descSelectors = [
-                    '[data-attrid="kc:/location/location:description"] span',
-                    '.kno-rdesc span',
-                    '[data-attrid="description"] span',
-                ];
-                for (const sel of descSelectors) {
+                const fallbacks = ['[data-attrid*="description"] span', '.kno-rdesc span'];
+                for (const sel of fallbacks) {
                     const el = document.querySelector(sel);
                     if (el) {
                         const t = el.textContent?.trim();
-                        if (t && t.length > 10) { data.description = t; break; }
+                        if (t && t.length > 10) { data.description = t; data.descriptionLength = t.length; break; }
                     }
                 }
             }
 
-            // === SOCIAL MEDIA PROFILES ===
-            const socialEl = document.querySelector('[data-attrid="kc:/common/topic:social media presence"]');
+            // === SOCIAL MEDIA PROFILES (Facebook, Instagram, Twitter, YouTube, LinkedIn) ===
+            const socialEl = document.querySelector('[data-attrid*="social media"]');
             if (socialEl) {
                 const links = socialEl.querySelectorAll('a');
                 for (const link of links) {
                     const name = link.textContent?.trim();
                     const href = link.href;
-                    if (name && href && !href.includes('google.com')) {
+                    if (name && href && !href.includes('google.com') && !href.includes('support.google')) {
                         data.socialProfiles.push({ platform: name, url: href });
                     }
                 }
             }
 
-            // === THIRD-PARTY RATINGS (Justdial, Practo, etc.) ===
-            const ratingsEl = document.querySelector('[data-attrid="kc:/location/location:third_party_aggregator_ratings"]');
+            // === THIRD-PARTY RATINGS (Justdial, Practo, Yelp, TripAdvisor, etc.) ===
+            const ratingsEl = document.querySelector('[data-attrid*="third_party"]');
             if (ratingsEl) {
                 const text = ratingsEl.textContent?.trim() || '';
-                // Parse patterns like "4.6/5 Justdial · 113 votes" or "4.8/5 Practo · 50 votes"
-                const ratingParts = text.split(/(?=\d+\.?\d*\/\d)/g);
-                for (const part of ratingParts) {
-                    const match = part.match(/(\d+\.?\d*)\/(\d+)\s*([A-Za-z]+)\s*·?\s*(\d[\d,]*)\s*(?:votes|reviews)/i);
-                    if (match) {
-                        data.thirdPartyRatings.push({
-                            platform: match[3],
-                            rating: parseFloat(match[1]),
-                            maxRating: parseInt(match[2], 10),
-                            reviewCount: parseInt(match[4].replace(/,/g, ''), 10),
+                const ratingRegex = /(\d+\.?\d*)\/(\d+)\s*([A-Za-z\s]+?)\s*·?\s*(\d[\d,]*)\s*(?:votes|reviews)/gi;
+                let match;
+                while ((match = ratingRegex.exec(text)) !== null) {
+                    data.thirdPartyRatings.push({
+                        platform: match[3].trim(),
+                        rating: parseFloat(match[1]),
+                        maxRating: parseInt(match[2], 10),
+                        reviewCount: parseInt(match[4].replace(/,/g, ''), 10),
+                    });
+                }
+            }
+
+            // === GOOGLE POSTS WITH EXACT DATES ===
+            const postsEl = document.querySelector('[data-attrid="kc:/local:posts"]');
+            if (postsEl) {
+                const text = postsEl.textContent?.trim() || '';
+                const dateRegex = /([A-Z][a-z]{2}\s+\d{1,2},?\s*\d{4})/g;
+                const dates = text.match(dateRegex) || [];
+                const ctaWords = /Call now|Learn more|Book|Sign up|Order online|Shop now|Get offer/gi;
+
+                for (let i = 0; i < dates.length; i++) {
+                    const dateStr = dates[i];
+                    const dateIdx = text.indexOf(dateStr);
+                    const prevEnd = i > 0 ? text.indexOf(dates[i - 1]) + dates[i - 1].length : text.indexOf('on Google') + 9;
+                    let postText = text.substring(Math.max(0, prevEnd), dateIdx).replace(ctaWords, '').trim();
+                    // Clean up residual whitespace and business name prefix
+                    postText = postText.replace(/^[\s\n]+/, '').replace(/[\s\n]+$/, '');
+                    // Extract CTA if present between this date and next
+                    const afterDate = text.substring(dateIdx + dateStr.length, i + 1 < dates.length ? text.indexOf(dates[i + 1]) : dateIdx + dateStr.length + 50);
+                    const ctaMatch = afterDate.match(/Call now|Learn more|Book|Sign up|Order online|Shop now|Get offer/i);
+
+                    if (postText.length > 5) {
+                        data.kpPosts.push({
+                            text: postText.substring(0, 300),
+                            date: dateStr,
+                            cta: ctaMatch ? ctaMatch[0] : null,
                         });
                     }
                 }
             }
 
-            // === GOOGLE POSTS FROM KP (with exact dates) ===
-            const postsEl = document.querySelector('[data-attrid="kc:/local:posts"]');
-            if (postsEl) {
-                const text = postsEl.textContent?.trim() || '';
-                // Parse posts — they appear as "text... Date\nCTA\ntext... Date\nCTA"
-                // Each post has text, a date like "Apr 3, 2026", and a CTA like "Call now"
-                const postBlocks = text.split(/(?=[A-Z][a-z]{2}\s+\d{1,2},\s*\d{4})/g);
-                // Alternative: look for date patterns
-                const datePattern = /([A-Z][a-z]{2}\s+\d{1,2},?\s*\d{4})/g;
-                const dates = text.match(datePattern) || [];
-
-                // Get individual post elements if possible
-                const postLinks = postsEl.querySelectorAll('a[href*="posts"], div[data-post-id]');
-                if (postLinks.length > 0) {
-                    for (const pl of postLinks) {
-                        data.kpPosts.push({
-                            text: pl.textContent?.trim()?.substring(0, 200),
-                            url: pl.href || null,
-                        });
-                    }
-                } else if (dates.length > 0) {
-                    // Parse from flat text using dates as separators
-                    for (let i = 0; i < dates.length; i++) {
-                        const dateStr = dates[i];
-                        const dateIdx = text.indexOf(dateStr);
-                        // Get the text before this date (post content)
-                        const prevDateIdx = i > 0 ? text.indexOf(dates[i - 1]) + dates[i - 1].length : 0;
-                        const postText = text.substring(prevDateIdx, dateIdx).replace(/Call now|Learn more|Book|Sign up|Order online/gi, '').trim();
-                        if (postText.length > 5) {
-                            data.kpPosts.push({
-                                text: postText.substring(0, 200),
-                                date: dateStr,
-                            });
-                        }
+            // === REVIEW SNIPPETS (visible in KP without clicking "View all") ===
+            const reviewSection = document.querySelector('[data-attrid*="review_summary"]');
+            if (reviewSection) {
+                const reviewLinks = reviewSection.querySelectorAll('a');
+                for (const a of reviewLinks) {
+                    const t = a.textContent?.trim();
+                    // Review snippets start with " quote
+                    if (t && (t.startsWith('"') || t.startsWith('\u201c'))) {
+                        data.kpReviewSnippets.push(t.substring(0, 150));
                     }
                 }
             }
 
             // === BUSYNESS ===
-            const busyEl = document.querySelector('[data-attrid="kc:/local:busyness"]');
+            const busyEl = document.querySelector('[data-attrid*="busyness"]');
             if (busyEl) {
-                data.kpBusyness = busyEl.textContent?.trim()?.substring(0, 100);
+                data.kpBusyness = busyEl.textContent?.trim()?.substring(0, 150) || null;
+            }
+
+            // === APPOINTMENT URL ===
+            const apptEl = document.querySelector('[data-attrid*="appointment"] a');
+            if (apptEl) {
+                data.kpAppointmentUrl = apptEl.href || null;
             }
 
             return data;
@@ -1301,7 +1321,7 @@ export async function extractFullKnowledgePanel(page, log, businessName) {
         await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
         await sleep(1000);
 
-        log.info(`KP: description=${!!result.description}, socialProfiles=${result.socialProfiles.length}, thirdPartyRatings=${result.thirdPartyRatings.length}, posts=${result.kpPosts.length}`);
+        log.info(`KP extracted: desc=${result.descriptionLength}chars, social=${result.socialProfiles.length}, ratings=${result.thirdPartyRatings.length}, posts=${result.kpPosts.length}, reviews=${result.kpReviewSnippets.length}`);
     } catch (err) {
         log.warning(`Knowledge Panel extraction failed: ${err.message}`);
     }
@@ -2041,6 +2061,7 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         socialProfiles: knowledgePanel.socialProfiles,
         thirdPartyRatings: knowledgePanel.thirdPartyRatings,
         kpPosts: knowledgePanel.kpPosts,
+        kpReviewSnippets: knowledgePanel.kpReviewSnippets,
     };
 
     // Compute audit metrics from the scraped data
