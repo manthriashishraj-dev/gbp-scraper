@@ -1578,7 +1578,8 @@ export async function extractFullKnowledgePanel(page, log, businessName) {
         const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(businessName)}`;
 
         log.info(`Extracting Knowledge Panel from Google Search: "${businessName}"`);
-        await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+        await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await sleep(2500);
 
         // Step 1: Click "More" / "Show more" on description to get full text

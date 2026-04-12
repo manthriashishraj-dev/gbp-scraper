@@ -64,16 +64,16 @@ for (const url of placeUrls) {
 
 // ========== CONFIGURE CRAWLER ==========
 
-// Configure proxy — RESIDENTIAL proxies make Google serve full pages (tabs, reviews, etc.)
+// Use GOOGLE_SERP proxy — $0.0025/search, works for both Maps and Search
+// This proxy is specifically designed for Google pages and won't get CAPTCHA'd
 let proxyConfiguration = null;
 try {
     proxyConfiguration = await Actor.createProxyConfiguration({
-        groups: ['RESIDENTIAL'],
-        countryCode: 'US',
+        groups: ['GOOGLE_SERP'],
     });
-    log.info('Using RESIDENTIAL proxy (US)');
+    log.info('Using GOOGLE_SERP proxy ($0.0025/page)');
 } catch (err) {
-    log.warning(`Residential proxy failed: ${err.message} — trying datacenter proxy`);
+    log.warning(`GOOGLE_SERP proxy failed: ${err.message} — trying BUYPROXIES94952`);
     try {
         proxyConfiguration = await Actor.createProxyConfiguration({
             groups: ['BUYPROXIES94952'],
