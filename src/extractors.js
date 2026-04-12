@@ -600,6 +600,8 @@ export async function extractPhotos(page, log, deepScrape = false) {
         coverPhotoUrl: null,
         photoCount: null,
         photosByCategory: null,
+        latestPhotoDate: null,
+        latestPhotoUploader: null,
     };
 
     try {
@@ -622,7 +624,10 @@ export async function extractPhotos(page, log, deepScrape = false) {
 
         // Deep scrape photos — categorized by section (Interior, Exterior, Food, etc.)
         if (deepScrape) {
-            result.photosByCategory = await extractPhotoGallery(page, log);
+            const galleryData = await extractPhotoGallery(page, log);
+            result.photosByCategory = galleryData.photos;
+            result.latestPhotoDate = galleryData.latestPhotoDate;
+            result.latestPhotoUploader = galleryData.latestPhotoUploader;
         }
     } catch (err) {
         log.warning(`extractPhotos error: ${err.message}`);
@@ -633,6 +638,8 @@ export async function extractPhotos(page, log, deepScrape = false) {
 
 async function extractPhotoGallery(page, log) {
     const categorizedPhotos = {};
+    let latestPhotoDate = null;
+    let latestPhotoUploader = null;
 
     try {
         // Click on the cover photo or photos tab to open gallery
@@ -648,20 +655,91 @@ async function extractPhotoGallery(page, log) {
             }
         }
 
-        // Get photo category tabs
+        // First: click on "Latest" tab to get the most recent photo's date
+        const latestTab = await page.evaluate(() => {
+            const tabs = document.querySelectorAll('.OKAoZd button, .ZKCDEc button, div[role="tablist"] button');
+            for (const tab of tabs) {
+                if (tab.textContent?.trim().toLowerCase() === 'latest') return true;
+            }
+            return false;
+        });
+        if (latestTab) {
+            // Click the "Latest" tab
+            await page.evaluate(() => {
+                const tabs = document.querySelectorAll('.OKAoZd button, .ZKCDEc button, div[role="tablist"] button');
+                for (const tab of tabs) {
+                    if (tab.textContent?.trim().toLowerCase() === 'latest') {
+                        tab.click();
+                        break;
+                    }
+                }
+            });
+            await sleep(2000);
+
+            // Click the first (most recent) photo to see its metadata
+            const firstPhoto = await page.$('a[data-photo-index="0"]') ||
+                await page.$('.U39Pmb:first-child') ||
+                await page.$('div[data-photo-index] a:first-child');
+            if (firstPhoto) {
+                await firstPhoto.click();
+                await sleep(1500);
+
+                // Extract uploader name and date from the photo detail overlay
+                const photoMeta = await page.evaluate(() => {
+                    // The overlay shows: "Business Name · 4 days ago" or "User Name · 2 months ago"
+                    // Try multiple possible selectors for the metadata bar
+                    const metaSelectors = [
+                        '.fCpYHe', '.ZProGe', '.qCHGyb', '.T6pBCe',
+                        'div[jsaction*="photo"] header', '.lbkBkb',
+                    ];
+                    for (const sel of metaSelectors) {
+                        const el = document.querySelector(sel);
+                        if (el) {
+                            const text = el.textContent?.trim() || '';
+                            // Pattern: "Name · X days/months/years ago"
+                            const parts = text.split('·').map((s) => s.trim());
+                            if (parts.length >= 2) {
+                                return { uploader: parts[0], date: parts[1] };
+                            }
+                            // Also try aria-label
+                            const ariaEl = el.querySelector('[aria-label]');
+                            if (ariaEl) {
+                                return { uploader: null, date: ariaEl.getAttribute('aria-label') };
+                            }
+                        }
+                    }
+                    // Try the separate elements approach
+                    const uploaderEl = document.querySelector('.Aq14fc span, .fCpYHe span:first-child');
+                    const dateEl = document.querySelector('.fCpYHe .rsqaWe, .dehysf, span[aria-label*="ago"]');
+                    return {
+                        uploader: uploaderEl?.textContent?.trim() || null,
+                        date: dateEl?.textContent?.trim() || null,
+                    };
+                });
+
+                latestPhotoUploader = photoMeta.uploader;
+                latestPhotoDate = photoMeta.date;
+
+                log.info(`Latest photo: uploaded by "${latestPhotoUploader}" — ${latestPhotoDate}`);
+
+                // Close the photo overlay
+                await page.keyboard.press('Escape');
+                await sleep(1000);
+            }
+        }
+
+        // Now extract categorized photos
         const catTabs = await resolveSelectorAll(page, SELECTORS.placeDetail.photoCategoryTab, { log });
 
         if (catTabs.length > 1) {
-            // Click each category tab and extract photos
             for (const tab of catTabs) {
                 try {
                     const categoryName = await tab.evaluate((el) => el.textContent?.trim() || 'All');
-                    if (categoryName === 'All') continue; // Skip "All" to avoid duplicates
+                    if (categoryName === 'All' || categoryName.toLowerCase() === 'latest') continue;
 
                     await tab.click();
                     await sleep(1500);
 
-                    // Scroll to load photos in this category
                     for (let i = 0; i < 5; i++) {
                         await page.evaluate(() => {
                             const s = document.querySelector('.m6QErb.DxyBCb') || document.querySelector('div[role="main"]');
@@ -670,7 +748,6 @@ async function extractPhotoGallery(page, log) {
                         await sleep(1000);
                     }
 
-                    // Extract photos for this category
                     const imgEls = await resolveSelectorAll(page, SELECTORS.placeDetail.photoGalleryImage, { log });
                     const urls = [];
                     for (const img of imgEls.slice(0, 50)) {
@@ -690,7 +767,7 @@ async function extractPhotoGallery(page, log) {
             }
         }
 
-        // Fallback: if no category tabs or none worked, get all photos flat
+        // Fallback: get all photos flat
         if (Object.keys(categorizedPhotos).length === 0) {
             for (let i = 0; i < 5; i++) {
                 await page.evaluate(() => {
@@ -721,7 +798,11 @@ async function extractPhotoGallery(page, log) {
         log.warning(`extractPhotoGallery error: ${err.message}`);
     }
 
-    return Object.keys(categorizedPhotos).length > 0 ? categorizedPhotos : null;
+    return {
+        photos: Object.keys(categorizedPhotos).length > 0 ? categorizedPhotos : null,
+        latestPhotoDate,
+        latestPhotoUploader,
+    };
 }
 
 // ========== ATTRIBUTES & AMENITIES ==========
@@ -1230,6 +1311,8 @@ function computeAuditMetrics(data) {
         attributesComplete: false,
 
         // Photos audit
+        latestPhotoDate: null,
+        latestPhotoUploader: null,
         hasRecentPhotos: false,
     };
 
@@ -1350,6 +1433,15 @@ function computeAuditMetrics(data) {
             .reduce((sum, items) => sum + items.length, 0);
         // Consider "complete" if 5+ sections
         metrics.attributesComplete = metrics.attributeSectionsCount >= 5;
+    }
+
+    // ---- Photo recency ----
+    metrics.latestPhotoDate = data.latestPhotoDate || null;
+    metrics.latestPhotoUploader = data.latestPhotoUploader || null;
+    if (data.latestPhotoDate) {
+        const d = data.latestPhotoDate.toLowerCase();
+        metrics.hasRecentPhotos = d.includes('day') || d.includes('hour') || d.includes('minute')
+            || d.includes('week') || d.includes('just now');
     }
 
     return metrics;

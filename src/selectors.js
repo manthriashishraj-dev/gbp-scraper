@@ -273,6 +273,21 @@ export const SELECTORS = {
             fallbacks: ['.U39Pmb img', 'div.loaded img[src*="googleusercontent"]', '.Uf0tqf img'],
             description: 'Individual photo in gallery view',
         },
+        photoGalleryItem: {
+            primary: 'a[data-photo-index]',
+            fallbacks: ['.U39Pmb', 'div[data-photo-index]'],
+            description: 'Clickable photo container in gallery (holds metadata on click)',
+        },
+        photoUploader: {
+            primary: '.fCpYHe span',
+            fallbacks: ['.ZProGe .Aq14fc', 'div[data-photo-index] .T6pBCe span', '.qCHGyb span'],
+            description: 'Photo uploader name shown in photo detail overlay',
+        },
+        photoUploadDate: {
+            primary: '.fCpYHe .rsqaWe',
+            fallbacks: ['.ZProGe .dehysf', '.qCHGyb .rsqaWe', 'span[aria-label*="ago"]'],
+            description: 'Photo upload date/relative time shown in photo detail overlay',
+        },
 
         // ========== ATTRIBUTES & AMENITIES ==========
         aboutTab: {
