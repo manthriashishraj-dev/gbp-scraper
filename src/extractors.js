@@ -1475,6 +1475,30 @@ function computeAuditMetrics(data) {
         metrics.attributesComplete = metrics.attributeSectionsCount >= 5;
     }
 
+    // ---- Website audit ----
+    if (data.websiteInfo) {
+        const wi = data.websiteInfo;
+        metrics.websiteSpeed = wi.websiteSpeed;
+        metrics.websiteLoadTimeMs = wi.websiteLoadTimeMs;
+        metrics.isHttps = wi.isHttps;
+        metrics.hasSchemaMarkup = wi.hasSchemaMarkup;
+        metrics.schemaTypes = wi.schemaTypes;
+        metrics.isMobileFriendly = wi.isMobileFriendly;
+        metrics.hasOpenGraph = wi.hasOpenGraph;
+        // GMB Master Pro scoring: "Fast + Schema (4 pts)", "Website, no schema (2 pts)", etc.
+        if (!data.website) {
+            metrics.websiteSpeedAndSchema = 'No website';
+        } else if (wi.websiteSpeed === 'Fast' && wi.hasSchemaMarkup) {
+            metrics.websiteSpeedAndSchema = 'Fast + Schema';
+        } else if (wi.hasSchemaMarkup) {
+            metrics.websiteSpeedAndSchema = 'Has schema, slow';
+        } else if (wi.websiteSpeed === 'Slow' || wi.websiteSpeed === 'Error') {
+            metrics.websiteSpeedAndSchema = 'Slow, no schema';
+        } else {
+            metrics.websiteSpeedAndSchema = 'Website, no schema';
+        }
+    }
+
     // ---- Photo recency ----
     metrics.latestPhotoDate = data.latestPhotoDate || null;
     metrics.latestPhotoUploader = data.latestPhotoUploader || null;
@@ -1485,6 +1509,186 @@ function computeAuditMetrics(data) {
     }
 
     return metrics;
+}
+
+// ========== WEBSITE SPEED & SCHEMA CHECK ==========
+
+export async function extractWebsiteInfo(page, log, websiteUrl) {
+    const result = {
+        websiteSpeed: null,
+        websiteLoadTimeMs: null,
+        websiteStatus: null,
+        hasSchemaMarkup: false,
+        schemaTypes: [],
+        schemaDetails: null,
+        hasOpenGraph: false,
+        openGraphData: null,
+        metaTitle: null,
+        metaDescription: null,
+        metaDescriptionLength: 0,
+        isHttps: false,
+        isMobileFriendly: null,
+    };
+
+    if (!websiteUrl) return result;
+
+    try {
+        log.info(`Checking website speed & schema: ${websiteUrl}`);
+
+        // Ensure HTTPS
+        result.isHttps = websiteUrl.startsWith('https://');
+
+        // Navigate to the website and measure load time
+        const startTime = Date.now();
+
+        const response = await page.goto(websiteUrl, {
+            waitUntil: 'networkidle2',
+            timeout: 20000,
+        });
+
+        const loadTimeMs = Date.now() - startTime;
+        result.websiteLoadTimeMs = loadTimeMs;
+        result.websiteStatus = response?.status() || null;
+
+        // Classify speed
+        if (loadTimeMs <= 3000) {
+            result.websiteSpeed = 'Fast';
+        } else if (loadTimeMs <= 5000) {
+            result.websiteSpeed = 'Average';
+        } else {
+            result.websiteSpeed = 'Slow';
+        }
+
+        // Get Performance API metrics if available
+        const perfMetrics = await page.evaluate(() => {
+            try {
+                const perf = performance.getEntriesByType('navigation')[0];
+                if (perf) {
+                    return {
+                        domContentLoaded: Math.round(perf.domContentLoadedEventEnd - perf.startTime),
+                        fullyLoaded: Math.round(perf.loadEventEnd - perf.startTime),
+                        ttfb: Math.round(perf.responseStart - perf.startTime),
+                        domInteractive: Math.round(perf.domInteractive - perf.startTime),
+                    };
+                }
+            } catch { /* */ }
+            return null;
+        });
+        if (perfMetrics) {
+            result.websitePerformance = perfMetrics;
+        }
+
+        // Extract ALL schema markup (JSON-LD, microdata, RDFa)
+        const schemaData = await page.evaluate(() => {
+            const schemas = [];
+
+            // 1. JSON-LD schemas
+            const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+            for (const script of jsonLdScripts) {
+                try {
+                    const parsed = JSON.parse(script.textContent);
+                    if (Array.isArray(parsed)) {
+                        for (const item of parsed) {
+                            schemas.push({
+                                format: 'JSON-LD',
+                                type: item['@type'] || 'Unknown',
+                                data: item,
+                            });
+                        }
+                    } else if (parsed['@graph']) {
+                        for (const item of parsed['@graph']) {
+                            schemas.push({
+                                format: 'JSON-LD',
+                                type: item['@type'] || 'Unknown',
+                                data: item,
+                            });
+                        }
+                    } else {
+                        schemas.push({
+                            format: 'JSON-LD',
+                            type: parsed['@type'] || 'Unknown',
+                            data: parsed,
+                        });
+                    }
+                } catch { /* invalid JSON-LD */ }
+            }
+
+            // 2. Microdata schemas
+            const microdataEls = document.querySelectorAll('[itemtype]');
+            for (const el of microdataEls) {
+                const itemtype = el.getAttribute('itemtype') || '';
+                const typeName = itemtype.split('/').pop();
+                schemas.push({
+                    format: 'Microdata',
+                    type: typeName,
+                    url: itemtype,
+                });
+            }
+
+            return schemas;
+        });
+
+        if (schemaData.length > 0) {
+            result.hasSchemaMarkup = true;
+            result.schemaTypes = [...new Set(schemaData.map((s) => s.type))];
+            result.schemaDetails = schemaData.map((s) => ({
+                format: s.format,
+                type: s.type,
+                // For JSON-LD, include key fields without the full dump
+                ...(s.data ? {
+                    name: s.data.name || null,
+                    url: s.data.url || null,
+                    telephone: s.data.telephone || null,
+                    address: s.data.address ? (typeof s.data.address === 'string' ? s.data.address : s.data.address.streetAddress) : null,
+                    aggregateRating: s.data.aggregateRating ? {
+                        ratingValue: s.data.aggregateRating.ratingValue,
+                        reviewCount: s.data.aggregateRating.reviewCount,
+                    } : null,
+                } : {}),
+            }));
+        }
+
+        // Extract Open Graph tags
+        const ogData = await page.evaluate(() => {
+            const og = {};
+            const ogTags = document.querySelectorAll('meta[property^="og:"]');
+            for (const tag of ogTags) {
+                const prop = tag.getAttribute('property')?.replace('og:', '') || '';
+                og[prop] = tag.getAttribute('content') || '';
+            }
+            return Object.keys(og).length > 0 ? og : null;
+        });
+
+        if (ogData) {
+            result.hasOpenGraph = true;
+            result.openGraphData = ogData;
+        }
+
+        // Extract meta title and description
+        const metaTags = await page.evaluate(() => {
+            const title = document.title || document.querySelector('meta[property="og:title"]')?.content || null;
+            const descEl = document.querySelector('meta[name="description"]') ||
+                document.querySelector('meta[property="og:description"]');
+            const description = descEl?.getAttribute('content') || null;
+            // Check viewport meta for mobile-friendliness hint
+            const viewport = document.querySelector('meta[name="viewport"]');
+            const hasMobileViewport = viewport?.content?.includes('width=device-width') || false;
+            return { title, description, hasMobileViewport };
+        });
+
+        result.metaTitle = metaTags.title;
+        result.metaDescription = metaTags.description;
+        result.metaDescriptionLength = metaTags.description?.length || 0;
+        result.isMobileFriendly = metaTags.hasMobileViewport;
+
+        log.info(`Website: ${result.websiteSpeed} (${loadTimeMs}ms), Schema: ${result.schemaTypes.join(', ') || 'None'}, HTTPS: ${result.isHttps}`);
+    } catch (err) {
+        log.warning(`extractWebsiteInfo error: ${err.message}`);
+        result.websiteSpeed = 'Error';
+        result.websiteStatus = 'unreachable';
+    }
+
+    return result;
 }
 
 // ========== MASTER ORCHESTRATOR ==========
@@ -1510,6 +1714,27 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
     // Profile claimed/verified
     const profileClaimed = await extractProfileClaimed(page, log);
 
+    // Website speed & schema check — navigate to the business website if it exists
+    let websiteInfo = {
+        websiteSpeed: null, websiteLoadTimeMs: null, websiteStatus: null,
+        hasSchemaMarkup: false, schemaTypes: [], schemaDetails: null,
+        hasOpenGraph: false, openGraphData: null, metaTitle: null,
+        metaDescription: null, metaDescriptionLength: 0, isHttps: false,
+        isMobileFriendly: null,
+    };
+    if (coreInfo.website) {
+        // Save current URL so we can go back
+        const gbpUrl = page.url();
+        websiteInfo = await extractWebsiteInfo(page, log, coreInfo.website);
+        // Navigate back to GBP page (in case further extraction is needed)
+        try {
+            await page.goto(gbpUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            await sleep(1000);
+        } catch {
+            // Best effort to go back
+        }
+    }
+
     // Build raw data
     const allFields = {
         ...coreInfo,
@@ -1525,6 +1750,7 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         ...services,
         ...qa,
         profileClaimed,
+        websiteInfo,
     };
 
     // Compute audit metrics from the scraped data
