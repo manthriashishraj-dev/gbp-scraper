@@ -23,7 +23,7 @@ router.addHandler(LABELS.SEARCH_RESULTS, async ({ page, request, log, crawler })
     // Wait for the search results feed to load
     const { element: feed } = await resolveSelector(page, SELECTORS.searchResults.feedContainer, {
         waitFor: true,
-        timeout: 15000,
+        timeout: 60000,
         log,
     });
 
@@ -77,7 +77,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
     // Wait for the business name to confirm the page loaded
     const { element: nameEl } = await resolveSelector(page, SELECTORS.placeDetail.businessName, {
         waitFor: true,
-        timeout: 15000,
+        timeout: 60000,
         log,
     });
 
