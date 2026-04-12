@@ -82,6 +82,12 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
     });
 
     if (!nameEl) {
+        // Take debug screenshot to see what the page looks like
+        try {
+            const screenshot = await page.screenshot({ fullPage: false, type: 'png' });
+            await Actor.setValue('DEBUG_PAGE_LOAD_FAILED', screenshot, { contentType: 'image/png' });
+            log.info('Debug screenshot saved as DEBUG_PAGE_LOAD_FAILED');
+        } catch { /* */ }
         log.error('Business name not found — page may not have loaded. Will retry.');
         throw new Error('Place page did not load properly');
     }
@@ -89,6 +95,23 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
     // Anti-bot: random delay + human-like scrolling
     await randomDelay();
     await humanScroll(page);
+
+    // Debug: save screenshot of what the page looks like after load
+    try {
+        const screenshot = await page.screenshot({ fullPage: false, type: 'png' });
+        await Actor.setValue('DEBUG_PAGE_AFTER_LOAD', screenshot, { contentType: 'image/png' });
+        log.info('Debug screenshot saved as DEBUG_PAGE_AFTER_LOAD');
+        // Also log the current URL and some DOM info
+        const debugInfo = await page.evaluate(() => ({
+            url: window.location.href.substring(0, 150),
+            title: document.title,
+            h1: document.querySelector('h1')?.textContent?.trim()?.substring(0, 80),
+            tabCount: document.querySelectorAll('.hh2c6').length,
+            reviewIdCount: document.querySelectorAll('[data-review-id]').length,
+            bodyTextStart: document.body.innerText.substring(0, 200),
+        }));
+        log.info(`Debug DOM: ${JSON.stringify(debugInfo)}`);
+    } catch { /* */ }
 
     // Run selector debug audit on first page only
     if (debugSelectors && !selectorDebugDone) {
