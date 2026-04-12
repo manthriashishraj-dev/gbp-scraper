@@ -914,6 +914,214 @@ async function extractPhotoGallery(page, log) {
     };
 }
 
+// ========== OWNER PHOTOS (from contributor profile) ==========
+
+export async function extractOwnerPhotos(page, log, businessName) {
+    const result = {
+        ownerPhotoCount: null,
+        ownerVideoCount: null,
+        ownerContributorId: null,
+        ownerContributorUrl: null,
+        ownerRecentPhotos: [],
+        ownerPhotosInLast30Days: 0,
+        ownerLatestPhotoDate: null,
+    };
+
+    if (!businessName) return result;
+
+    try {
+        const currentUrl = page.url();
+
+        // Step 1: Go to Google Search, open KP photos, click "By owner", get contributor URL
+        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(businessName)}`;
+        await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await sleep(2500);
+
+        // Click "See photos" in KP
+        await page.evaluate(() => {
+            const btns = document.querySelectorAll('button');
+            for (const b of btns) {
+                const r = b.getBoundingClientRect();
+                if (r.left > 680 && b.textContent?.trim() === 'See photos') { b.click(); break; }
+            }
+        });
+        await sleep(2000);
+
+        // Click "By owner" tab
+        await page.evaluate(() => {
+            const btns = document.querySelectorAll('button, div[role="tab"]');
+            for (const b of btns) {
+                if (b.textContent?.trim() === 'By owner') { b.click(); break; }
+            }
+        });
+        await sleep(2000);
+
+        // Get the contributor URL by finding the header link in the photo overlay
+        const contribUrl = await page.evaluate(() => {
+            // The uploader name in the photo overlay is a clickable link to /maps/contrib/ID
+            const links = document.querySelectorAll('a[href*="/maps/contrib/"]');
+            for (const a of links) {
+                if (a.href.includes('/maps/contrib/')) return a.href;
+            }
+            // Fallback: look for any element that navigates to contrib page
+            const allAs = document.querySelectorAll('a');
+            for (const a of allAs) {
+                if (a.href?.includes('contrib')) return a.href;
+            }
+            return null;
+        });
+
+        if (!contribUrl) {
+            // Try clicking the first "By owner" photo to open overlay, then click the uploader name
+            const firstPhoto = await page.evaluate(() => {
+                const imgs = document.querySelectorAll('img[src*="googleusercontent"]');
+                if (imgs.length > 0) { imgs[0].closest('a, button, div')?.click(); return true; }
+                return false;
+            });
+            if (firstPhoto) {
+                await sleep(1500);
+                // Now click the uploader name header to navigate to contrib page
+                await page.evaluate(() => {
+                    const headers = document.querySelectorAll('.fCpYHe a, .ZProGe a, a[href*="contrib"]');
+                    for (const a of headers) {
+                        if (a.href?.includes('contrib')) { a.click(); break; }
+                    }
+                });
+                await sleep(2000);
+            }
+        } else {
+            // Navigate directly to contributor page
+            await page.goto(contribUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            await sleep(2000);
+        }
+
+        // Step 2: Check if we're on the contributor profile page
+        const onContribPage = page.url().includes('/maps/contrib/');
+        if (!onContribPage) {
+            log.warning('Could not navigate to contributor profile page');
+            await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            return result;
+        }
+
+        // Extract contributor ID from URL
+        const contribIdMatch = page.url().match(/contrib\/(\d+)/);
+        result.ownerContributorId = contribIdMatch ? contribIdMatch[1] : null;
+        result.ownerContributorUrl = page.url().split('?')[0];
+
+        // Step 3: Click "Photos" tab if not already active
+        await page.evaluate(() => {
+            const tabs = document.querySelectorAll('button[role="tab"]');
+            for (const t of tabs) {
+                if (t.textContent?.trim() === 'Photos') { t.click(); break; }
+            }
+        });
+        await sleep(1000);
+
+        // Step 4: Parse photo/video counts from the header text " 61  0"
+        const counts = await page.evaluate(() => {
+            const lines = document.body.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+            for (const line of lines) {
+                // Pattern: " 61  0" or "61  0" (photo count followed by video count)
+                const m = line.match(/^\s*(\d+)\s+(\d+)\s*$/);
+                if (m) return { photos: parseInt(m[1], 10), videos: parseInt(m[2], 10) };
+            }
+            return null;
+        });
+        if (counts) {
+            result.ownerPhotoCount = counts.photos;
+            result.ownerVideoCount = counts.videos;
+        }
+
+        // Step 5: Click through first 10 photos to get dates
+        for (let i = 0; i < 10; i++) {
+            try {
+                // Click photo at position - the grid has rows of 3 photos
+                const clicked = await page.evaluate((index) => {
+                    const photos = document.querySelectorAll('.Tya61d, .BcOb1, button[jsaction*="photo"]');
+                    if (index < photos.length) {
+                        photos[index].click();
+                        return true;
+                    }
+                    // Try clicking via the 3-dot menu buttons
+                    const menuBtns = document.querySelectorAll('.xUc6Hf');
+                    if (index * 2 < menuBtns.length) {
+                        // Photos are interspersed with menu buttons
+                    }
+                    return false;
+                }, i);
+
+                if (!clicked) {
+                    // Fallback: click by coordinates in the thumbnail grid
+                    // Grid starts at roughly x=55, y=230, each thumb is ~135x130
+                    const col = i % 3;
+                    const row = Math.floor(i / 3);
+                    const x = 95 + col * 105;
+                    const y = 260 + row * 150;
+                    await page.mouse.click(x, y);
+                }
+
+                await sleep(1200);
+
+                // Extract date from photo overlay
+                const photoDate = await page.evaluate(() => {
+                    // Look for "Photo - Apr 2026" pattern
+                    const allText = document.body.innerText;
+                    const photoMatch = allText.match(/Photo\s*[-–]\s*([A-Za-z]+\s+\d{4})/);
+                    if (photoMatch) return photoMatch[1].trim();
+                    // Fallback: "Image capture: Apr 2026"
+                    const captureMatch = allText.match(/Image capture[:\s]*([A-Za-z]+\s+\d{4})/);
+                    if (captureMatch) return captureMatch[1].trim();
+                    // Fallback: relative date
+                    const headerEl = document.querySelector('.fCpYHe, .ZProGe, .qCHGyb');
+                    if (headerEl) {
+                        const text = headerEl.textContent?.trim() || '';
+                        const parts = text.split('·').map(s => s.trim());
+                        if (parts.length >= 2) return parts[parts.length - 1];
+                    }
+                    return null;
+                });
+
+                if (photoDate) {
+                    result.ownerRecentPhotos.push({ index: i, date: photoDate });
+                    if (i === 0) result.ownerLatestPhotoDate = photoDate;
+
+                    // Check if within last 30 days
+                    const lower = photoDate.toLowerCase();
+                    if (lower.includes('day') || lower.includes('hour') || lower.includes('minute') ||
+                        lower.includes('just now') || lower.includes('week')) {
+                        result.ownerPhotosInLast30Days++;
+                    }
+                    // For "Mon YYYY" format, check if it's the current month
+                    const now = new Date();
+                    const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+                    const currentMonth = monthNames[now.getMonth()];
+                    const currentYear = now.getFullYear().toString();
+                    if (lower.includes(currentMonth) && lower.includes(currentYear)) {
+                        result.ownerPhotosInLast30Days++;
+                    }
+                }
+
+                // Close the photo overlay
+                await page.keyboard.press('Escape');
+                await sleep(500);
+            } catch {
+                try { await page.keyboard.press('Escape'); } catch { /* */ }
+                await sleep(300);
+            }
+        }
+
+        log.info(`Owner photos: ${result.ownerPhotoCount} photos, ${result.ownerVideoCount} videos, latest: ${result.ownerLatestPhotoDate}, last30days: ${result.ownerPhotosInLast30Days}`);
+
+        // Navigate back to Maps
+        await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await sleep(1000);
+    } catch (err) {
+        log.warning(`extractOwnerPhotos error: ${err.message}`);
+    }
+
+    return result;
+}
+
 // ========== ATTRIBUTES & AMENITIES ==========
 
 export async function extractAttributes(page, log) {
@@ -2042,6 +2250,16 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         }
     }
 
+    // Owner photos — from contributor profile (navigates to /maps/contrib/ID)
+    let ownerPhotos = {
+        ownerPhotoCount: null, ownerVideoCount: null, ownerContributorId: null,
+        ownerContributorUrl: null, ownerRecentPhotos: [], ownerPhotosInLast30Days: 0,
+        ownerLatestPhotoDate: null,
+    };
+    if (deepScrape && coreInfo.name) {
+        ownerPhotos = await extractOwnerPhotos(page, log, coreInfo.name);
+    }
+
     // Build raw data
     const allFields = {
         ...coreInfo,
@@ -2058,6 +2276,7 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         ...qa,
         profileClaimed,
         websiteInfo,
+        ...ownerPhotos,
         socialProfiles: knowledgePanel.socialProfiles,
         thirdPartyRatings: knowledgePanel.thirdPartyRatings,
         kpPosts: knowledgePanel.kpPosts,
