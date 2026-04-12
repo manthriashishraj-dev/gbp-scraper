@@ -322,6 +322,12 @@ export async function extractRatingsAndReviews(page, log, deepScrape = false) {
             result.reviews = await extractDetailedReviews(page, log);
             // Set review extraction metadata
             if (result.reviews && result.reviews._meta) {
+                // Count replies from actual scraped reviews
+                const withReply = result.reviews.filter((r) => r.ownerResponseText).length;
+                const withoutReply = result.reviews.length - withReply;
+                const replyRatePercent = result.reviews.length > 0
+                    ? Math.round((withReply / result.reviews.length) * 100) : 0;
+
                 result.reviewsMeta = {
                     totalReviewsOnProfile: result.reviewCount,
                     reviewsExtracted: result.reviews.length,
@@ -329,9 +335,36 @@ export async function extractRatingsAndReviews(page, log, deepScrape = false) {
                     newestReviewDate: result.reviews[0]?.date || null,
                     oldestReviewDate: result.reviews[result.reviews.length - 1]?.date || null,
                     missingReviews: Math.max(0, (result.reviewCount || 0) - result.reviews.length),
+                    // Owner reply stats
+                    ownerRepliedCount: withReply,
+                    ownerNotRepliedCount: withoutReply,
+                    ownerReplyRate: `${withReply}/${result.reviews.length}`,
+                    ownerReplyRatePercent: replyRatePercent,
+                    // Latest reply info
+                    latestOwnerReply: null,
+                    latestOwnerReplyDate: null,
+                    // Star breakdown from scraped reviews
+                    starBreakdown: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
                 };
-                delete result.reviews._meta; // Clean up internal meta
-                log.info(`Reviews: ${result.reviewsMeta.reviewsExtracted}/${result.reviewsMeta.totalReviewsOnProfile} extracted (${result.reviewsMeta.gotAllReviews ? 'COMPLETE' : result.reviewsMeta.missingReviews + ' MISSING'})`);
+
+                // Find latest owner reply (reviews are sorted newest first)
+                for (const r of result.reviews) {
+                    if (r.ownerResponseText) {
+                        result.reviewsMeta.latestOwnerReply = r.ownerResponseText.substring(0, 200);
+                        result.reviewsMeta.latestOwnerReplyDate = r.ownerResponseDate;
+                        break;
+                    }
+                }
+
+                // Star breakdown from scraped reviews
+                for (const r of result.reviews) {
+                    if (r.rating >= 1 && r.rating <= 5) {
+                        result.reviewsMeta.starBreakdown[r.rating]++;
+                    }
+                }
+
+                delete result.reviews._meta;
+                log.info(`Reviews: ${result.reviewsMeta.reviewsExtracted}/${result.reviewsMeta.totalReviewsOnProfile} extracted (${result.reviewsMeta.gotAllReviews ? 'COMPLETE' : result.reviewsMeta.missingReviews + ' MISSING'}) | Replies: ${withReply}/${result.reviews.length} (${replyRatePercent}%)`);
             }
         }
     } catch (err) {
