@@ -1062,27 +1062,56 @@ export async function extractOwnerPhotos(page, log, businessName) {
 
                 await sleep(1200);
 
-                // Extract date from photo overlay
-                const photoDate = await page.evaluate(() => {
-                    // Look for "Photo - Apr 2026" pattern
+                // Extract date AND image URL from photo overlay
+                const photoMeta = await page.evaluate(() => {
+                    let date = null;
+                    let imageUrl = null;
+
+                    // Date: "Photo - Apr 2026"
                     const allText = document.body.innerText;
                     const photoMatch = allText.match(/Photo\s*[-–]\s*([A-Za-z]+\s+\d{4})/);
-                    if (photoMatch) return photoMatch[1].trim();
-                    // Fallback: "Image capture: Apr 2026"
-                    const captureMatch = allText.match(/Image capture[:\s]*([A-Za-z]+\s+\d{4})/);
-                    if (captureMatch) return captureMatch[1].trim();
-                    // Fallback: relative date
-                    const headerEl = document.querySelector('.fCpYHe, .ZProGe, .qCHGyb');
-                    if (headerEl) {
-                        const text = headerEl.textContent?.trim() || '';
-                        const parts = text.split('·').map(s => s.trim());
-                        if (parts.length >= 2) return parts[parts.length - 1];
+                    if (photoMatch) date = photoMatch[1].trim();
+                    if (!date) {
+                        const captureMatch = allText.match(/Image capture[:\s]*([A-Za-z]+\s+\d{4})/);
+                        if (captureMatch) date = captureMatch[1].trim();
                     }
-                    return null;
+                    if (!date) {
+                        const headerEl = document.querySelector('.fCpYHe, .ZProGe, .qCHGyb');
+                        if (headerEl) {
+                            const text = headerEl.textContent?.trim() || '';
+                            const parts = text.split('·').map(s => s.trim());
+                            if (parts.length >= 2) date = parts[parts.length - 1];
+                        }
+                    }
+
+                    // Image URL: find the large preview image
+                    const imgs = document.querySelectorAll('img[src*="googleusercontent"]');
+                    for (const img of imgs) {
+                        const r = img.getBoundingClientRect();
+                        // The main preview image is the largest one (> 300px wide)
+                        if (r.width > 300 && img.src) {
+                            // Convert to high-res URL by replacing size params
+                            imageUrl = img.src.replace(/=w\d+-h\d+[^!]*/, '=w1200-h900');
+                            break;
+                        }
+                    }
+                    // Fallback: extract from the page URL which contains the photo ID
+                    if (!imageUrl) {
+                        const url = window.location.href;
+                        const idMatch = url.match(/1s(AF1Qip[A-Za-z0-9_-]+)/);
+                        if (idMatch) {
+                            imageUrl = 'https://lh3.googleusercontent.com/p/' + idMatch[1] + '=w1200-h900';
+                        }
+                    }
+
+                    return { date, imageUrl };
                 });
 
-                if (photoDate) {
-                    result.ownerRecentPhotos.push({ index: i, date: photoDate });
+                const photoDate = photoMeta.date;
+                const photoUrl = photoMeta.imageUrl;
+
+                if (photoDate || photoUrl) {
+                    result.ownerRecentPhotos.push({ index: i, date: photoDate, url: photoUrl });
                     if (i === 0) result.ownerLatestPhotoDate = photoDate;
 
                     // Check if within last 30 days
