@@ -1091,8 +1091,42 @@ export async function extractDescription(page, log) {
     };
 
     try {
+        // Strategy 1: Try Maps page selectors
         result.description = await resolveSelectorText(page, SELECTORS.placeDetail.description, { log });
         result.fromTheBusiness = await resolveSelectorText(page, SELECTORS.placeDetail.fromTheBusiness, { log });
+
+        // Strategy 2: Try "From the owner" section on Maps (scroll down first)
+        if (!result.description && !result.fromTheBusiness) {
+            result.fromTheBusiness = await page.evaluate(() => {
+                // Look for "From the owner" heading and get the text after it
+                const headings = document.querySelectorAll('h2, h3, div.fontTitleSmall');
+                for (const h of headings) {
+                    const text = h.textContent?.trim().toLowerCase();
+                    if (text === 'from the owner' || text === 'from the business') {
+                        // Get the next sibling or parent's next text content
+                        const parent = h.closest('.iP2t7d, .WeS02d, .m6QErb > div');
+                        if (parent) {
+                            const allText = parent.textContent?.trim();
+                            // Remove the heading text
+                            const cleaned = allText?.replace(/from the (owner|business)/i, '').trim();
+                            if (cleaned && cleaned.length > 5) return cleaned;
+                        }
+                    }
+                }
+                return null;
+            });
+        }
+
+        // Strategy 3: Try Knowledge Panel via Google Search
+        if (!result.description) {
+            const businessName = await resolveSelectorText(page, SELECTORS.placeDetail.businessName);
+            if (businessName) {
+                const kpDescription = await extractFromKnowledgePanel(page, log, businessName);
+                if (kpDescription) {
+                    result.description = kpDescription;
+                }
+            }
+        }
 
         const identEls = await resolveSelectorAll(page, SELECTORS.placeDetail.identifiesAs, { log });
         if (identEls.length > 0) {
@@ -1106,6 +1140,62 @@ export async function extractDescription(page, log) {
     }
 
     return result;
+}
+
+/**
+ * Fallback: search Google for the business name and extract description from Knowledge Panel.
+ */
+async function extractFromKnowledgePanel(page, log, businessName) {
+    try {
+        const currentUrl = page.url();
+        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(businessName)}`;
+
+        await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await sleep(2000);
+
+        const description = await page.evaluate(() => {
+            // Try Knowledge Panel description selectors
+            const selectors = [
+                '[data-attrid="kc:/location/location:description"] span',
+                '[data-attrid*="merchant_description"] span',
+                '.kno-rdesc span',
+                '[data-attrid="description"] span',
+                '[data-attrid*="description"]',
+            ];
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    const text = el.textContent?.trim();
+                    if (text && text.length > 10) return text;
+                }
+            }
+
+            // Try "From the business" section in KP
+            const allDivs = document.querySelectorAll('div');
+            for (const div of allDivs) {
+                if (div.children.length <= 3) {
+                    const text = div.textContent?.trim();
+                    if (text && text.startsWith('From the business')) {
+                        return text.replace('From the business', '').trim();
+                    }
+                }
+            }
+
+            return null;
+        });
+
+        // Navigate back to the Maps page
+        await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await sleep(1000);
+
+        if (description) {
+            log.info(`Extracted description from Knowledge Panel: "${description.substring(0, 80)}..."`);
+        }
+        return description;
+    } catch (err) {
+        log.warning(`Knowledge Panel extraction failed: ${err.message}`);
+        return null;
+    }
 }
 
 // ========== RELATED PLACES ==========
