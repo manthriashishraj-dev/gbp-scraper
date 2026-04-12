@@ -290,11 +290,19 @@ export async function extractRatingsAndReviews(page, log, deepScrape = false) {
             if (isNaN(result.rating)) result.rating = null;
         }
 
-        // Review count
-        const countText = await resolveSelectorText(page, SELECTORS.placeDetail.reviewCount, { log });
-        if (countText) {
-            const digits = countText.replace(/[^0-9]/g, '');
+        // Review count — extract from aria-label which contains "95 reviews"
+        const reviewCountAttr = await resolveSelectorAttr(page, SELECTORS.placeDetail.reviewCount, 'aria-label', { log });
+        if (reviewCountAttr) {
+            const digits = reviewCountAttr.replace(/[^0-9]/g, '');
             result.reviewCount = digits ? parseInt(digits, 10) : null;
+        }
+        // Fallback: extract from text like "(95)"
+        if (!result.reviewCount) {
+            const countText = await resolveSelectorText(page, SELECTORS.placeDetail.reviewCount, { log });
+            if (countText) {
+                const digits = countText.replace(/[^0-9]/g, '');
+                result.reviewCount = digits ? parseInt(digits, 10) : null;
+            }
         }
 
         // Rating distribution from histogram (pass reviewCount to convert percentages to counts)
@@ -616,11 +624,28 @@ export async function extractPhotos(page, log, deepScrape = false) {
             });
         }
 
-        // Photo count
+        // Photo count — try selector first, then extract from photo button aria-label
         const countText = await resolveSelectorText(page, SELECTORS.placeDetail.photoCount, { log });
         if (countText) {
             const digits = countText.replace(/[^0-9]/g, '');
             result.photoCount = digits ? parseInt(digits, 10) : null;
+        }
+        // Fallback: extract from the photo button's aria-label or the gallery header
+        if (!result.photoCount) {
+            result.photoCount = await page.evaluate(() => {
+                // Try aria-label on photo-related elements like "Photos of Business (61)"
+                const photoEl = document.querySelector('[aria-label*="Photos"]') ||
+                    document.querySelector('[aria-label*="photos"]');
+                if (photoEl) {
+                    const m = photoEl.getAttribute('aria-label')?.match(/(\d+)/);
+                    if (m) return parseInt(m[1], 10);
+                }
+                // Try the gallery header "📷 61"
+                const allText = document.body.innerText;
+                const match = allText.match(/📷\s*(\d+)/);
+                if (match) return parseInt(match[1], 10);
+                return null;
+            });
         }
 
         // Deep scrape photos
@@ -922,17 +947,22 @@ export async function extractAttributes(page, log) {
             try {
                 const sectionData = await section.evaluate((el) => {
                     // Find the section title
-                    const titleEl = el.querySelector('.iP2t7d .fontTitleSmall') ||
+                    const titleEl = el.querySelector('.iL3Qke.fontTitleSmall') ||
+                        el.querySelector('.iP2t7d .fontTitleSmall') ||
                         el.querySelector('h2') || el.querySelector('h4');
                     const title = titleEl?.textContent?.trim() || 'Other';
 
                     // Find all chips — include BOTH available and unavailable with status
                     const chips = [];
-                    const chipEls = el.querySelectorAll('.CK16pd, .Ufn4mc, li.hpLkke');
+                    const chipEls = el.querySelectorAll('li.hpLkke, .CK16pd, .Ufn4mc');
                     for (const chip of chipEls) {
-                        const text = chip.textContent?.trim();
+                        // Get text from aria-label first (more reliable), then textContent
+                        const ariaSpan = chip.querySelector('span[aria-label]');
+                        const text = ariaSpan?.getAttribute('aria-label')?.replace(/ available| unavailable/gi, '').trim()
+                            || chip.textContent?.trim();
                         const isAvailable = !chip.classList.contains('hgKrVf') &&
-                            !chip.querySelector('.hgKrVf');
+                            !chip.querySelector('.hgKrVf') &&
+                            !(ariaSpan?.getAttribute('aria-label') || '').toLowerCase().includes('unavailable');
                         if (text) {
                             chips.push({ text, available: isAvailable });
                         }

@@ -130,9 +130,9 @@ export const SELECTORS = {
             description: 'Numeric rating value (e.g., 4.5)',
         },
         reviewCount: {
-            primary: 'div.F7nice span[aria-label]',
-            fallbacks: ['span[aria-label*="reviews"]', 'button[jsaction*="review"] span', 'span.UY7F9'],
-            description: 'Review count text (e.g., "(1,234 reviews)")',
+            primary: 'span[aria-label*="reviews"]',
+            fallbacks: ['span[aria-label*="Reviews"]', 'div.F7nice span:last-child', 'span.UY7F9'],
+            description: 'Review count text (e.g., "(95)" with aria-label "95 reviews")',
         },
         ratingDistribution: {
             primary: 'tr.BHOKXe',
@@ -145,9 +145,9 @@ export const SELECTORS = {
             description: 'Review highlight keyword chips',
         },
         moreReviewsButton: {
-            primary: 'button[jsaction*="pane.rating.moreReviews"]',
-            fallbacks: ['button[aria-label*="reviews"]', 'a[href*="reviews"]', 'button.HHrUdb'],
-            description: 'Button to open the full reviews panel',
+            primary: 'button.hh2c6[aria-label*="Reviews"]',
+            fallbacks: ['button.hh2c6[aria-label*="eview"]', 'button[jsaction*="pane.rating.moreReviews"]', 'button[aria-label*="reviews"]'],
+            description: 'Reviews tab button to open full reviews panel',
         },
         reviewsSortButton: {
             primary: 'button[data-value="Sort"]',
@@ -232,9 +232,9 @@ export const SELECTORS = {
             description: 'Table rows in weekly hours schedule',
         },
         hoursCurrentStatus: {
-            primary: '.ZDu9vd span.ZLl8Od',
-            fallbacks: ['.OqCZI span.ZLl8Od', 'span[data-opens]'],
-            description: 'Current open/closed status text',
+            primary: '.o0Svhf',
+            fallbacks: ['.ZDu9vd span.ZLl8Od', '.OqCZI span.ZLl8Od', 'span[data-opens]'],
+            description: 'Current open/closed status text (e.g. "Closed · Opens 9 am Mon")',
         },
         specialHoursSection: {
             primary: '.OqCZI .g2BVhd',
@@ -254,9 +254,9 @@ export const SELECTORS = {
             description: 'Main hero/cover photo',
         },
         photoCount: {
-            primary: 'button[jsaction*="pane.heroHeaderImage.click"] div.fontBodySmall',
-            fallbacks: ['div.YkuOqf', 'button[aria-label*="photo"] span', 'div.cRLbXd'],
-            description: 'Photo count label',
+            primary: 'div.YkuOqf',
+            fallbacks: ['button[aria-label*="Photo"] div.fontBodySmall', 'div.cRLbXd', 'button[aria-label*="photo"] span'],
+            description: 'Photo count label (may need to extract from gallery header)',
         },
         photoTab: {
             primary: 'button[data-tab-index="1"]',
@@ -291,33 +291,33 @@ export const SELECTORS = {
 
         // ========== ATTRIBUTES & AMENITIES ==========
         aboutTab: {
-            primary: 'button[aria-label="About"]',
-            fallbacks: ['button[data-tab-index="6"]', 'a[href*="about"]'],
+            primary: 'button.hh2c6[aria-label*="About"]',
+            fallbacks: ['button[aria-label="About"]', 'button[data-tab-index="6"]', 'button[role="tab"][aria-label*="About"]'],
             description: 'About tab button to show attributes',
         },
         attributeSection: {
-            primary: '.LTs0Rc',
-            fallbacks: ['div[jsaction*="amenities"]', '.iP2t7d', '.AcxpOf'],
+            primary: '.iP2t7d',
+            fallbacks: ['.LTs0Rc', 'div[jsaction*="amenities"]', '.AcxpOf'],
             description: 'Container for attribute chip sections',
         },
         attributeSectionTitle: {
-            primary: '.iP2t7d .fontTitleSmall',
-            fallbacks: ['.LTs0Rc h2', '.AcxpOf h4'],
+            primary: '.iL3Qke.fontTitleSmall',
+            fallbacks: ['.iP2t7d .fontTitleSmall', '.LTs0Rc h2', '.AcxpOf h4'],
             description: 'Heading text for an attribute section',
         },
         attributeChip: {
-            primary: '.CK16pd',
-            fallbacks: ['span[data-tooltip]', '.Ufn4mc', 'li.hpLkke'],
+            primary: 'li.hpLkke',
+            fallbacks: ['.CK16pd', 'span[data-tooltip]', '.Ufn4mc'],
             description: 'Individual attribute chip within a section',
         },
         attributeChipText: {
-            primary: '.CK16pd span',
-            fallbacks: ['.Ufn4mc span', '.hpLkke span'],
+            primary: 'li.hpLkke span[aria-label]',
+            fallbacks: ['.hpLkke span', '.CK16pd span', '.Ufn4mc span'],
             description: 'Text content of an attribute chip',
         },
         attributeChipAvailable: {
-            primary: '.CK16pd:not(.hgKrVf)',
-            fallbacks: ['.CK16pd[aria-checked="true"]'],
+            primary: 'li.hpLkke:not(.hgKrVf)',
+            fallbacks: ['.CK16pd:not(.hgKrVf)'],
             description: 'Attribute chip that is available (not crossed out)',
         },
 
@@ -397,8 +397,8 @@ export const SELECTORS = {
 
         // ========== DESCRIPTION ==========
         description: {
-            primary: 'div.WeS02d div.PYvSYb',
-            fallbacks: ['div[aria-label="Description"] span', '.bkqMod', '.WeS02d span'],
+            primary: '.PYvSYb',
+            fallbacks: ['div.WeS02d div.PYvSYb', 'div[aria-label="Description"] span', '.bkqMod', '.WeS02d span'],
             description: 'Business description / about text',
         },
         fromTheBusiness: {
