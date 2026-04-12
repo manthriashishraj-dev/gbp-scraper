@@ -1036,31 +1036,45 @@ export async function extractOwnerPhotos(page, log, businessName) {
         for (let i = 0; i < 10; i++) {
             try {
                 // Click photo at position - the grid has rows of 3 photos
-                const clicked = await page.evaluate((index) => {
-                    const photos = document.querySelectorAll('.Tya61d, .BcOb1, button[jsaction*="photo"]');
-                    if (index < photos.length) {
-                        photos[index].click();
-                        return true;
+                if (i === 0) {
+                    // First photo: click the thumbnail to open overlay
+                    const clicked = await page.evaluate(() => {
+                        // Click the first photo thumbnail in the grid
+                        const photos = document.querySelectorAll('.Tya61d, .BcOb1, button[jsaction*="photo"]');
+                        if (photos.length > 0) { photos[0].click(); return true; }
+                        return false;
+                    });
+                    if (!clicked) {
+                        // Fallback: click by coordinates (first photo top-left)
+                        await page.mouse.click(95, 270);
                     }
-                    // Try clicking via the 3-dot menu buttons
-                    const menuBtns = document.querySelectorAll('.xUc6Hf');
-                    if (index * 2 < menuBtns.length) {
-                        // Photos are interspersed with menu buttons
+                    await sleep(2000);
+                } else {
+                    // Subsequent photos: click the NEXT arrow button in the overlay
+                    const hasNext = await page.evaluate(() => {
+                        // Look for the right/next arrow button
+                        const nextBtn = document.querySelector('button[aria-label="Next photo"], button[aria-label="Next Photo"], button.J32FTe');
+                        if (nextBtn) { nextBtn.click(); return true; }
+                        // Fallback: right arrow key
+                        return false;
+                    });
+                    if (!hasNext) {
+                        // Fallback: press right arrow key to navigate
+                        await page.keyboard.press('ArrowRight');
                     }
-                    return false;
-                }, i);
-
-                if (!clicked) {
-                    // Fallback: click by coordinates in the thumbnail grid
-                    // Grid starts at roughly x=55, y=230, each thumb is ~135x130
-                    const col = i % 3;
-                    const row = Math.floor(i / 3);
-                    const x = 95 + col * 105;
-                    const y = 260 + row * 150;
-                    await page.mouse.click(x, y);
+                    await sleep(1500);
                 }
 
-                await sleep(1200);
+                // Wait for the page URL to update with the new photo ID
+                const prevUrl = i > 0 ? (result.ownerRecentPhotos[i - 1]?.url || '') : '';
+                await sleep(500);
+
+                // Wait up to 3s for URL to change (means new photo loaded)
+                for (let w = 0; w < 6; w++) {
+                    const curUrl = await page.evaluate(() => window.location.href);
+                    if (curUrl !== prevUrl || i === 0) break;
+                    await sleep(500);
+                }
 
                 // Extract date AND image URL from photo overlay
                 const photoMeta = await page.evaluate(() => {
@@ -1084,23 +1098,23 @@ export async function extractOwnerPhotos(page, log, businessName) {
                         }
                     }
 
-                    // Image URL: find the large preview image
-                    const imgs = document.querySelectorAll('img[src*="googleusercontent"]');
-                    for (const img of imgs) {
-                        const r = img.getBoundingClientRect();
-                        // The main preview image is the largest one (> 300px wide)
-                        if (r.width > 300 && img.src) {
-                            // Convert to high-res URL by replacing size params
-                            imageUrl = img.src.replace(/=w\d+-h\d+[^!]*/, '=w1200-h900');
-                            break;
-                        }
+                    // Image URL: PRIMARY method — extract photo ID from current page URL
+                    // The URL always updates with the correct photo ID: !1sAF1QipXXXX
+                    const currentUrl = window.location.href;
+                    const idMatch = currentUrl.match(/1s(AF1Qip[A-Za-z0-9_-]+)/);
+                    if (idMatch) {
+                        imageUrl = 'https://lh3.googleusercontent.com/p/' + idMatch[1] + '=w1200-h900';
                     }
-                    // Fallback: extract from the page URL which contains the photo ID
+
+                    // Fallback: find the large preview image src
                     if (!imageUrl) {
-                        const url = window.location.href;
-                        const idMatch = url.match(/1s(AF1Qip[A-Za-z0-9_-]+)/);
-                        if (idMatch) {
-                            imageUrl = 'https://lh3.googleusercontent.com/p/' + idMatch[1] + '=w1200-h900';
+                        const imgs = document.querySelectorAll('img[src*="googleusercontent"]');
+                        for (const img of imgs) {
+                            const r = img.getBoundingClientRect();
+                            if (r.width > 300 && img.src) {
+                                imageUrl = img.src.replace(/=w\d+-h\d+[^!]*/, '=w1200-h900');
+                                break;
+                            }
                         }
                     }
 
@@ -1109,6 +1123,14 @@ export async function extractOwnerPhotos(page, log, businessName) {
 
                 const photoDate = photoMeta.date;
                 const photoUrl = photoMeta.imageUrl;
+
+                // Skip if we got the same URL as previous photo (means navigation didn't work)
+                const prevPhotoUrl = result.ownerRecentPhotos.length > 0
+                    ? result.ownerRecentPhotos[result.ownerRecentPhotos.length - 1].url : null;
+                if (photoUrl && photoUrl === prevPhotoUrl) {
+                    log.warning(`Owner photo ${i}: same URL as previous — skipping (navigation may have failed)`);
+                    continue;
+                }
 
                 if (photoDate || photoUrl) {
                     result.ownerRecentPhotos.push({ index: i, date: photoDate, url: photoUrl });
@@ -1130,12 +1152,11 @@ export async function extractOwnerPhotos(page, log, businessName) {
                     }
                 }
 
-                // Close the photo overlay
-                await page.keyboard.press('Escape');
-                await sleep(500);
+                // Don't close overlay — we navigate with Next arrow/ArrowRight
             } catch {
-                try { await page.keyboard.press('Escape'); } catch { /* */ }
-                await sleep(300);
+                // If something went wrong, try to recover
+                try { await page.keyboard.press('Escape'); await sleep(500); } catch { /* */ }
+                break; // Stop iterating on error
             }
         }
 
