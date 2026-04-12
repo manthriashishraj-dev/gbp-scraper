@@ -112,6 +112,9 @@ export function extractBusinessFromApi(placeData) {
         ownerName: null,
         ownerContributorId: null,
         hours: null,
+        coverPhotoUrl: null,
+        photoCount: null,
+        googleMapsUrl: null,
     };
 
     // -- name --
@@ -183,6 +186,34 @@ export function extractBusinessFromApi(placeData) {
         biz.hours = parseHours(d[203]);
     } catch { /* ignore */ }
 
+    // -- coverPhotoUrl (from d[37] or d[122]) --
+    try {
+        // Look for googleusercontent URL in the data
+        const photoUrl = safeGet(d, 122, 0, 1);
+        if (typeof photoUrl === 'string' && photoUrl.includes('googleusercontent')) {
+            biz.coverPhotoUrl = photoUrl.replace(/=w\d+-h\d+[^!]*/, '=w800-h600');
+        }
+        // Fallback: try d[157]
+        if (!biz.coverPhotoUrl) {
+            const altUrl = d[157];
+            if (typeof altUrl === 'string' && altUrl.includes('googleusercontent')) {
+                biz.coverPhotoUrl = altUrl.replace(/=s\d+/, '=s800');
+            }
+        }
+    } catch { /* ignore */ }
+
+    // -- photoCount --
+    try {
+        // Photo count is often embedded as a number in the photos section
+        const count = safeGet(d, 37, 0, 0, 0, 6);
+        if (typeof count === 'number') biz.photoCount = count;
+    } catch { /* ignore */ }
+
+    // -- googleMapsUrl --
+    try {
+        biz.googleMapsUrl = safeGet(d, 96, 10, 1, 0, 0, 2, 1) || null;
+    } catch { /* ignore */ }
+
     return biz;
 }
 
@@ -210,36 +241,42 @@ function parseHours(hoursArray) {
 
     const hours = {};
 
-    for (const entry of hoursArray) {
+    // d[203] structure: each top-level entry is an array wrapping day entries
+    // d[203][0] = [["Monday", 1, [2026,4,13], [["9 am–9 pm", [[9],[21]]]], 0, 1]]
+    // We need to flatten one level and then parse each day
+    for (const wrapper of hoursArray) {
         try {
-            if (!Array.isArray(entry)) continue;
+            if (!Array.isArray(wrapper)) continue;
 
-            // entry[0] is the day name string provided by Google (e.g. "Monday").
-            // entry[1] is a numeric day index.
-            const dayName = entry[0] ?? DAY_NAMES[entry[1]] ?? null;
-            if (!dayName) continue;
+            // Check if this is a day entry directly or a wrapper
+            const entries = (typeof wrapper[0] === 'string') ? [wrapper] : wrapper;
 
-            // Try to read the human-readable time string.
-            const timeSlots = entry[3];
-            if (Array.isArray(timeSlots) && timeSlots.length > 0) {
-                // Collect all time-range strings for the day (handles split hours).
-                const ranges = [];
-                for (const slot of timeSlots) {
-                    const label = safeGet(slot, 0);
-                    if (typeof label === 'string' && label.length > 0) {
-                        ranges.push(label);
+            for (const entry of entries) {
+                if (!Array.isArray(entry)) continue;
+                if (typeof entry[0] !== 'string') continue;
+
+                // Skip status entries like "Closed · Opens 9 am"
+                if (entry[0].includes('Closed') || entry[0].includes('Opens')) continue;
+
+                const dayName = entry[0]; // "Monday", "Tuesday", etc.
+                if (!DAY_NAMES.includes(dayName) && !['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].includes(dayName)) continue;
+
+                const timeSlots = entry[3];
+                if (Array.isArray(timeSlots) && timeSlots.length > 0) {
+                    const ranges = [];
+                    for (const slot of timeSlots) {
+                        const label = safeGet(slot, 0);
+                        if (typeof label === 'string' && label.length > 0) {
+                            ranges.push(label);
+                        }
                     }
+                    hours[dayName] = ranges.length > 0 ? ranges.join(', ') : 'Closed';
+                } else {
+                    hours[dayName] = 'Closed';
                 }
-                hours[dayName] = ranges.length > 0 ? ranges.join(', ') : 'Closed';
-            } else {
-                // No time data available; check for a status string.
-                const status = entry[4];
-                hours[dayName] = typeof status === 'string' && status.length > 0
-                    ? status
-                    : 'Closed';
             }
         } catch {
-            // Skip malformed day entries.
+            // Skip malformed entries
         }
     }
 
