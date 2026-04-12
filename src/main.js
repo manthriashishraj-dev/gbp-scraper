@@ -64,15 +64,21 @@ for (const url of placeUrls) {
 
 // ========== CONFIGURE CRAWLER ==========
 
-// Configure proxy — Apify's residential proxies help avoid Google's bot detection
-const proxyConfiguration = await Actor.createProxyConfiguration({
-    groups: ['GOOGLE_SERP'],
-    countryCode: 'US',
-});
+// Configure proxy — use Apify's datacenter proxies (available on all plans)
+// For better results, upgrade to RESIDENTIAL or GOOGLE_SERP proxy groups
+let proxyConfiguration = null;
+try {
+    proxyConfiguration = await Actor.createProxyConfiguration({
+        groups: ['SHADER'],  // Apify's default datacenter proxy
+    });
+} catch {
+    // If no proxy available, run without proxy
+    console.log('No proxy configured — running without proxy');
+}
 
 const crawler = new PuppeteerCrawler({
     requestHandler: router,
-    proxyConfiguration,
+    ...(proxyConfiguration ? { proxyConfiguration } : {}),
     launchContext: {
         launcher: puppeteerExtra,
         launchOptions: {
