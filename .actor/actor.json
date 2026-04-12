@@ -1,0 +1,11 @@
+{
+  "actorSpecification": 1,
+  "name": "gbp-scraper",
+  "title": "Google Business Profile Scraper",
+  "description": "Scrapes all available data from Google Business Profile listings on Google Maps.",
+  "version": "0.1",
+  "buildTag": "latest",
+  "input": "../INPUT_SCHEMA.json",
+  "readme": "../README.md",
+  "dockerfile": "./Dockerfile"
+}

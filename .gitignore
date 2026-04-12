@@ -1,0 +1,6 @@
+node_modules/
+storage/
+apify_storage/
+.env
+INPUT.json
+*.log

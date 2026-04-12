@@ -1,0 +1,63 @@
+{
+  "title": "Google Business Profile Scraper Input",
+  "description": "Configure search queries or direct place URLs to scrape Google Business Profiles.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "searchQueries": {
+      "title": "Search Queries",
+      "type": "array",
+      "description": "Google Maps search queries (e.g., 'restaurants in Austin, TX'). Each query will search Google Maps and extract listings.",
+      "editor": "stringList",
+      "items": { "type": "string" },
+      "prefill": ["restaurants in Austin, TX"]
+    },
+    "placeUrls": {
+      "title": "Place URLs",
+      "type": "array",
+      "description": "Direct Google Maps place URLs to scrape.",
+      "editor": "stringList",
+      "items": { "type": "string" }
+    },
+    "maxResults": {
+      "title": "Max Results Per Query",
+      "type": "integer",
+      "description": "Maximum number of listings to extract per search query.",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 120,
+      "editor": "number"
+    },
+    "language": {
+      "title": "Language",
+      "type": "string",
+      "description": "Language code for Google Maps (e.g., 'en', 'es', 'fr').",
+      "default": "en",
+      "editor": "textfield"
+    },
+    "deepScrape": {
+      "title": "Deep Scrape",
+      "type": "boolean",
+      "description": "If enabled, scrapes reviews, photos, and Q&A in detail. Slower but more comprehensive.",
+      "default": false,
+      "editor": "checkbox"
+    },
+    "debugSelectors": {
+      "title": "Debug Selectors",
+      "type": "boolean",
+      "description": "If enabled, runs a selector health audit and saves a report to the key-value store.",
+      "default": false,
+      "editor": "checkbox"
+    },
+    "maxConcurrency": {
+      "title": "Max Concurrency",
+      "type": "integer",
+      "description": "Maximum number of pages open in parallel. Lower values reduce bot detection risk.",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 10,
+      "editor": "number"
+    }
+  },
+  "required": []
+}

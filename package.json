@@ -1,0 +1,20 @@
+{
+  "name": "gbp-scraper",
+  "version": "1.0.0",
+  "description": "Apify Actor to scrape Google Business Profile listings from Google Maps",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "dependencies": {
+    "apify": "^3.7.0",
+    "crawlee": "^3.16.0",
+    "puppeteer": "^24.2.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "author": "",
+  "license": "ISC"
+}
