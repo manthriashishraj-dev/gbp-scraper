@@ -922,6 +922,7 @@ export async function extractOwnerPhotos(page, log, businessName) {
         ownerVideoCount: null,
         ownerContributorId: null,
         ownerContributorUrl: null,
+        ownerAllPhotoUrls: [],
         ownerRecentPhotos: [],
         ownerPhotosInLast30Days: 0,
         ownerLatestPhotoDate: null,
@@ -1032,135 +1033,87 @@ export async function extractOwnerPhotos(page, log, businessName) {
             result.ownerVideoCount = counts.videos;
         }
 
-        // Step 5: Click through first 10 photos to get dates
-        for (let i = 0; i < 10; i++) {
-            try {
-                // Click photo at position - the grid has rows of 3 photos
-                if (i === 0) {
-                    // First photo: click the thumbnail to open overlay
-                    const clicked = await page.evaluate(() => {
-                        // Click the first photo thumbnail in the grid
-                        const photos = document.querySelectorAll('.Tya61d, .BcOb1, button[jsaction*="photo"]');
-                        if (photos.length > 0) { photos[0].click(); return true; }
-                        return false;
-                    });
-                    if (!clicked) {
-                        // Fallback: click by coordinates (first photo top-left)
-                        await page.mouse.click(95, 270);
-                    }
-                    await sleep(2000);
-                } else {
-                    // Subsequent photos: click the NEXT arrow button in the overlay
-                    const hasNext = await page.evaluate(() => {
-                        // Look for the right/next arrow button
-                        const nextBtn = document.querySelector('button[aria-label="Next photo"], button[aria-label="Next Photo"], button.J32FTe');
-                        if (nextBtn) { nextBtn.click(); return true; }
-                        // Fallback: right arrow key
-                        return false;
-                    });
-                    if (!hasNext) {
-                        // Fallback: press right arrow key to navigate
-                        await page.keyboard.press('ArrowRight');
-                    }
-                    await sleep(1500);
-                }
-
-                // Wait for the page URL to update with the new photo ID
-                const prevUrl = i > 0 ? (result.ownerRecentPhotos[i - 1]?.url || '') : '';
-                await sleep(500);
-
-                // Wait up to 3s for URL to change (means new photo loaded)
-                for (let w = 0; w < 6; w++) {
-                    const curUrl = await page.evaluate(() => window.location.href);
-                    if (curUrl !== prevUrl || i === 0) break;
-                    await sleep(500);
-                }
-
-                // Extract date AND image URL from photo overlay
-                const photoMeta = await page.evaluate(() => {
-                    let date = null;
-                    let imageUrl = null;
-
-                    // Date: "Photo - Apr 2026"
-                    const allText = document.body.innerText;
-                    const photoMatch = allText.match(/Photo\s*[-–]\s*([A-Za-z]+\s+\d{4})/);
-                    if (photoMatch) date = photoMatch[1].trim();
-                    if (!date) {
-                        const captureMatch = allText.match(/Image capture[:\s]*([A-Za-z]+\s+\d{4})/);
-                        if (captureMatch) date = captureMatch[1].trim();
-                    }
-                    if (!date) {
-                        const headerEl = document.querySelector('.fCpYHe, .ZProGe, .qCHGyb');
-                        if (headerEl) {
-                            const text = headerEl.textContent?.trim() || '';
-                            const parts = text.split('·').map(s => s.trim());
-                            if (parts.length >= 2) date = parts[parts.length - 1];
-                        }
-                    }
-
-                    // Image URL: PRIMARY method — extract photo ID from current page URL
-                    // The URL always updates with the correct photo ID: !1sAF1QipXXXX
-                    const currentUrl = window.location.href;
-                    const idMatch = currentUrl.match(/1s(AF1Qip[A-Za-z0-9_-]+)/);
-                    if (idMatch) {
-                        imageUrl = 'https://lh3.googleusercontent.com/p/' + idMatch[1] + '=w1200-h900';
-                    }
-
-                    // Fallback: find the large preview image src
-                    if (!imageUrl) {
-                        const imgs = document.querySelectorAll('img[src*="googleusercontent"]');
-                        for (const img of imgs) {
-                            const r = img.getBoundingClientRect();
-                            if (r.width > 300 && img.src) {
-                                imageUrl = img.src.replace(/=w\d+-h\d+[^!]*/, '=w1200-h900');
-                                break;
-                            }
-                        }
-                    }
-
-                    return { date, imageUrl };
-                });
-
-                const photoDate = photoMeta.date;
-                const photoUrl = photoMeta.imageUrl;
-
-                // Skip if we got the same URL as previous photo (means navigation didn't work)
-                const prevPhotoUrl = result.ownerRecentPhotos.length > 0
-                    ? result.ownerRecentPhotos[result.ownerRecentPhotos.length - 1].url : null;
-                if (photoUrl && photoUrl === prevPhotoUrl) {
-                    log.warning(`Owner photo ${i}: same URL as previous — skipping (navigation may have failed)`);
-                    continue;
-                }
-
-                if (photoDate || photoUrl) {
-                    result.ownerRecentPhotos.push({ index: i, date: photoDate, url: photoUrl });
-                    if (i === 0) result.ownerLatestPhotoDate = photoDate;
-
-                    // Check if within last 30 days
-                    const lower = photoDate.toLowerCase();
-                    if (lower.includes('day') || lower.includes('hour') || lower.includes('minute') ||
-                        lower.includes('just now') || lower.includes('week')) {
-                        result.ownerPhotosInLast30Days++;
-                    }
-                    // For "Mon YYYY" format, check if it's the current month
-                    const now = new Date();
-                    const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-                    const currentMonth = monthNames[now.getMonth()];
-                    const currentYear = now.getFullYear().toString();
-                    if (lower.includes(currentMonth) && lower.includes(currentYear)) {
-                        result.ownerPhotosInLast30Days++;
-                    }
-                }
-
-                // Don't close overlay — we navigate with Next arrow/ArrowRight
-            } catch {
-                // If something went wrong, try to recover
-                try { await page.keyboard.press('Escape'); await sleep(500); } catch { /* */ }
-                break; // Stop iterating on error
-            }
+        // Step 5: Extract ALL photo URLs from thumbnails (no clicking needed!)
+        // The grid page has all thumbnail imgs with unique photo IDs in src
+        // Scroll to load all thumbnails first
+        for (let s = 0; s < 10; s++) {
+            await page.evaluate(() => {
+                const panel = document.querySelector('.m6QErb.DxyBCb') || document.querySelector('.m6QErb');
+                if (panel) panel.scrollTo(0, panel.scrollHeight);
+            });
+            await sleep(800);
         }
 
-        log.info(`Owner photos: ${result.ownerPhotoCount} photos, ${result.ownerVideoCount} videos, latest: ${result.ownerLatestPhotoDate}, last30days: ${result.ownerPhotosInLast30Days}`);
+        const allPhotoUrls = await page.evaluate(() => {
+            const imgs = document.querySelectorAll('img[src*="googleusercontent"]');
+            const urls = [];
+            const seen = new Set();
+            for (const img of imgs) {
+                const src = img.src || '';
+                const idMatch = src.match(/\/p\/(AF1Qip[A-Za-z0-9_-]+)/);
+                if (idMatch && !seen.has(idMatch[1])) {
+                    seen.add(idMatch[1]);
+                    urls.push('https://lh3.googleusercontent.com/p/' + idMatch[1] + '=w1200-h900');
+                }
+            }
+            return urls;
+        });
+
+        // Store all owner photo URLs
+        result.ownerAllPhotoUrls = allPhotoUrls;
+
+        // Step 6: Click ONLY the first photo to get the latest upload date
+        try {
+            await page.mouse.click(95, 260);
+            await sleep(2000);
+
+            const latestDate = await page.evaluate(() => {
+                const allText = document.body.innerText;
+                const photoMatch = allText.match(/Photo\s*[-–]\s*([A-Za-z]+\s+\d{4})/);
+                if (photoMatch) return photoMatch[1].trim();
+                const captureMatch = allText.match(/Image capture[:\s]*([A-Za-z]+\s+\d{4})/);
+                if (captureMatch) return captureMatch[1].trim();
+                // Relative date
+                const headerEl = document.querySelector('.fCpYHe, .ZProGe, .qCHGyb');
+                if (headerEl) {
+                    const text = headerEl.textContent?.trim() || '';
+                    const parts = text.split('·').map(s => s.trim());
+                    if (parts.length >= 2) return parts[parts.length - 1];
+                }
+                return null;
+            });
+
+            result.ownerLatestPhotoDate = latestDate;
+
+            // Build ownerRecentPhotos with URLs + date for first photo
+            if (allPhotoUrls.length > 0) {
+                result.ownerRecentPhotos = allPhotoUrls.slice(0, 10).map((url, i) => ({
+                    index: i,
+                    url,
+                    date: i === 0 ? latestDate : null, // Only first photo has date from click
+                }));
+            }
+
+            // Check if latest photo is within last 30 days
+            if (latestDate) {
+                const lower = latestDate.toLowerCase();
+                if (lower.includes('day') || lower.includes('hour') || lower.includes('minute') ||
+                    lower.includes('just now') || lower.includes('week')) {
+                    result.ownerPhotosInLast30Days = 1; // At least 1 recent
+                }
+                const now = new Date();
+                const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+                const currentMonth = monthNames[now.getMonth()];
+                const currentYear = now.getFullYear().toString();
+                if (lower.includes(currentMonth) && lower.includes(currentYear)) {
+                    result.ownerPhotosInLast30Days = 1;
+                }
+            }
+        } catch (err) {
+            log.warning(`Failed to get latest photo date: ${err.message}`);
+        }
+
+        log.info(`Owner photos: ${result.ownerPhotoCount} total, ${allPhotoUrls.length} URLs extracted, latest: ${result.ownerLatestPhotoDate}`);
 
         // Navigate back to Maps
         await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
