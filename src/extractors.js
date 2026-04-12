@@ -320,6 +320,19 @@ export async function extractRatingsAndReviews(page, log, deepScrape = false) {
         // Deep scrape reviews
         if (deepScrape) {
             result.reviews = await extractDetailedReviews(page, log);
+            // Set review extraction metadata
+            if (result.reviews && result.reviews._meta) {
+                result.reviewsMeta = {
+                    totalReviewsOnProfile: result.reviewCount,
+                    reviewsExtracted: result.reviews.length,
+                    gotAllReviews: result.reviews.length >= (result.reviewCount || 0),
+                    newestReviewDate: result.reviews[0]?.date || null,
+                    oldestReviewDate: result.reviews[result.reviews.length - 1]?.date || null,
+                    missingReviews: Math.max(0, (result.reviewCount || 0) - result.reviews.length),
+                };
+                delete result.reviews._meta; // Clean up internal meta
+                log.info(`Reviews: ${result.reviewsMeta.reviewsExtracted}/${result.reviewsMeta.totalReviewsOnProfile} extracted (${result.reviewsMeta.gotAllReviews ? 'COMPLETE' : result.reviewsMeta.missingReviews + ' MISSING'})`);
+            }
         }
     } catch (err) {
         log.warning(`extractRatingsAndReviews error: ${err.message}`);
@@ -398,25 +411,57 @@ async function extractDetailedReviews(page, log) {
         }
 
         // Step 3: Scroll to load ALL reviews
-        for (let i = 0; i < 50; i++) {
-            const currentCount = (await page.$$('[data-review-id]')).length;
-            if (currentCount >= 95) break; // All loaded
+        // Get total review count from the page to know our target
+        const totalReviewCount = await page.evaluate(() => {
+            const el = document.querySelector('span[aria-label*="reviews"]');
+            if (el) {
+                const m = el.getAttribute('aria-label')?.match(/(\d+)/);
+                if (m) return parseInt(m[1], 10);
+            }
+            // Fallback: parse from rating section text
+            const f7 = document.querySelector('div.F7nice');
+            if (f7) {
+                const m = f7.textContent?.match(/\((\d+)\)/);
+                if (m) return parseInt(m[1], 10);
+            }
+            return 999; // Unknown — keep scrolling
+        });
+        log.info(`Target: ${totalReviewCount} total reviews to load`);
 
+        let stuckCount = 0;
+        let prevCount = 0;
+        for (let i = 0; i < 100; i++) {
+            const currentCount = (await page.$$('[data-review-id]')).length;
+
+            // Check if we got them all
+            if (currentCount >= totalReviewCount) {
+                log.info(`All ${currentCount}/${totalReviewCount} reviews loaded`);
+                break;
+            }
+
+            // Stuck detection
+            if (currentCount === prevCount) {
+                stuckCount++;
+                if (stuckCount >= 5) {
+                    log.warning(`Review scroll stuck at ${currentCount}/${totalReviewCount} — Google may have stopped loading more`);
+                    break;
+                }
+            } else {
+                stuckCount = 0;
+                if (currentCount % 20 === 0 || currentCount > prevCount + 5) {
+                    log.info(`Loading reviews: ${currentCount}/${totalReviewCount}...`);
+                }
+            }
+            prevCount = currentCount;
+
+            // Scroll
             await page.evaluate(() => {
                 const scrollable = document.querySelector('.m6QErb.DxyBCb.kA9KIf.dS8AEf') ||
                     document.querySelector('.m6QErb.DxyBCb') ||
                     document.querySelector('div[role="main"]');
                 if (scrollable) scrollable.scrollTo(0, scrollable.scrollHeight);
             });
-            await sleep(1200);
-
-            const newCount = (await page.$$('[data-review-id]')).length;
-            if (newCount === currentCount) {
-                // Stuck — try scrolling 2 more times then give up
-                await sleep(1500);
-                const finalCount = (await page.$$('[data-review-id]')).length;
-                if (finalCount === currentCount) break;
-            }
+            await sleep(1200 + Math.random() * 500);
         }
 
         // Step 4: Expand all "More" buttons
@@ -531,6 +576,18 @@ async function extractDetailedReviews(page, log) {
     }
 
     log.info(`Total reviews extracted: ${reviews.length}`);
+
+    // Add extraction metadata to each review array
+    if (reviews.length > 0) {
+        reviews._meta = {
+            totalReviewsOnProfile: null, // Will be set by caller from reviewCount
+            reviewsExtracted: reviews.length,
+            gotAllReviews: false, // Will be set by caller
+            oldestReviewDate: reviews[reviews.length - 1]?.date || null,
+            newestReviewDate: reviews[0]?.date || null,
+        };
+    }
+
     return reviews.length > 0 ? reviews : null;
 }
 
