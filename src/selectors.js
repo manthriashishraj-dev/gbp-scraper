@@ -117,6 +117,11 @@ export const SELECTORS = {
             fallbacks: ['div[data-attrid="kc:/location/location:description"] span', '.bkqMod span'],
             description: 'Knowledge panel summary/description text',
         },
+        profileClaimed: {
+            primary: 'span[data-owner-id]',
+            fallbacks: ['[aria-label*="Claimed"]', 'a[data-item-id="merchant"]', '.Yf0ySe'],
+            description: 'Profile claimed/verified indicator',
+        },
 
         // ========== RATINGS & REVIEWS ==========
         ratingValue: {

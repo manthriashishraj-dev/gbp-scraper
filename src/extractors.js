@@ -1164,6 +1164,197 @@ export async function extractServices(page, log) {
     return result;
 }
 
+// ========== PROFILE CLAIMED/VERIFIED ==========
+
+async function extractProfileClaimed(page, log) {
+    // Check multiple signals for claimed/verified profile
+    const claimed = await page.evaluate(() => {
+        // Signal 1: data-owner-id attribute exists
+        if (document.querySelector('span[data-owner-id]')) return true;
+        // Signal 2: "Claimed" text in the profile
+        if (document.querySelector('[aria-label*="Claimed"]')) return true;
+        // Signal 3: Owner-managed link present
+        if (document.querySelector('a[data-item-id="merchant"]')) return true;
+        // Signal 4: "Suggest an edit" button (only on claimed profiles)
+        if (document.querySelector('button[aria-label*="Suggest an edit"]')) return true;
+        // Signal 5: Owner response on reviews (strong signal)
+        if (document.querySelector('.CDe7pd, .ODSEW')) return true;
+        return null; // Unknown
+    });
+    return claimed;
+}
+
+// ========== AUDIT METRICS (computed from scraped data) ==========
+
+function computeAuditMetrics(data) {
+    const metrics = {
+        // Description
+        descriptionLength: data.description ? data.description.length : 0,
+        hasDescription: !!data.description,
+
+        // Profile
+        profileClaimed: data.profileClaimed || null,
+        businessNameHasKeywords: false,
+
+        // Categories
+        secondaryCategoriesCount: data.additionalCategories?.length || 0,
+
+        // Services quality
+        servicesCount: data.services?.length || 0,
+        servicesWithDescriptions: 0,
+        servicesQuality: 'No services section',
+
+        // Reviews audit
+        replyRate: null,
+        repliedReviewsCount: 0,
+        unrepliedReviewsCount: 0,
+        latestReviewDate: null,
+        oldestReviewDate: null,
+        averageReviewRating: null,
+        reviewVelocityPerMonth: null,
+
+        // Posts audit
+        postsCount: data.posts?.length || 0,
+        latestPostDate: null,
+        postTypes: [],
+        postFrequency: 'No posts',
+
+        // Hours audit
+        hoursCompleteness: 'No hours set',
+        daysWithHours: 0,
+        hasSpecialHours: !!(data.specialHours && data.specialHours.length > 0),
+
+        // Attributes audit
+        attributeSectionsCount: 0,
+        totalAttributesCount: 0,
+        attributesComplete: false,
+
+        // Photos audit
+        hasRecentPhotos: false,
+    };
+
+    // ---- Business Name keyword stuffing check ----
+    if (data.name && data.primaryCategory) {
+        const nameLower = data.name.toLowerCase();
+        const catLower = data.primaryCategory.toLowerCase();
+        const catWords = catLower.split(/\s+/).filter((w) => w.length > 3);
+        metrics.businessNameHasKeywords = catWords.some((w) => nameLower.includes(w));
+        // Also check for city name
+        if (data.city) {
+            metrics.businessNameHasKeywords = metrics.businessNameHasKeywords ||
+                nameLower.includes(data.city.toLowerCase());
+        }
+    }
+
+    // ---- Services quality ----
+    if (data.services && data.services.length > 0) {
+        metrics.servicesWithDescriptions = data.services.filter((s) => s.description && s.description.length > 10).length;
+        if (metrics.servicesWithDescriptions >= 10) {
+            metrics.servicesQuality = '10+ with 150+ word descriptions';
+        } else if (metrics.servicesWithDescriptions >= 5) {
+            metrics.servicesQuality = '5-9 with descriptions';
+        } else if (data.services.length > 0) {
+            metrics.servicesQuality = 'Listed, no descriptions';
+        }
+    }
+
+    // ---- Reply rate from reviews ----
+    if (data.reviews && data.reviews.length > 0) {
+        const withResponse = data.reviews.filter((r) => r.ownerResponseText).length;
+        const total = data.reviews.length;
+        metrics.repliedReviewsCount = withResponse;
+        metrics.unrepliedReviewsCount = total - withResponse;
+        metrics.replyRate = Math.round((withResponse / total) * 100);
+
+        // Latest / oldest review date
+        metrics.latestReviewDate = data.reviews[0]?.date || null;
+        metrics.oldestReviewDate = data.reviews[data.reviews.length - 1]?.date || null;
+
+        // Average rating
+        const ratings = data.reviews.filter((r) => r.rating).map((r) => r.rating);
+        if (ratings.length > 0) {
+            metrics.averageReviewRating = Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10;
+        }
+
+        // Review velocity — estimate from date spread in reviews
+        // Google gives relative dates like "2 months ago", "a week ago"
+        // We'll count reviews and estimate monthly rate
+        const reviewCount = data.reviews.length;
+        // Rough estimate: if we have 100 reviews sorted by newest,
+        // check how many have "month" vs "week" vs "day" in their date
+        let recentCount = 0;
+        for (const r of data.reviews) {
+            const d = (r.date || '').toLowerCase();
+            if (d.includes('day') || d.includes('week') || d.includes('a month') || d.includes('1 month')) {
+                recentCount++;
+            }
+        }
+        if (recentCount > 0) {
+            metrics.reviewVelocityPerMonth = recentCount; // approximate monthly velocity
+        }
+    }
+
+    // ---- Posts audit ----
+    if (data.posts && data.posts.length > 0) {
+        metrics.latestPostDate = data.posts[0]?.date || null;
+
+        // Classify post types based on content
+        const types = new Set();
+        for (const post of data.posts) {
+            if (post.ctaText) {
+                const cta = post.ctaText.toLowerCase();
+                if (cta.includes('offer') || cta.includes('deal') || cta.includes('discount')) types.add('Offer');
+                else if (cta.includes('book') || cta.includes('reserve') || cta.includes('appointment')) types.add('Event/Booking');
+                else if (cta.includes('learn') || cta.includes('more')) types.add('Update');
+                else if (cta.includes('order') || cta.includes('buy') || cta.includes('shop')) types.add('Product');
+                else types.add('Update');
+            } else if (post.imageUrl && post.text) {
+                types.add('Photo Update');
+            } else {
+                types.add('Update');
+            }
+        }
+        metrics.postTypes = [...types];
+
+        // Post frequency estimate from dates
+        const postCount = data.posts.length;
+        if (postCount >= 3) {
+            metrics.postFrequency = '3+/week';
+        } else if (postCount >= 1) {
+            metrics.postFrequency = '1-2/week';
+        }
+        // Check if latest post is old
+        const latestDate = (data.posts[0]?.date || '').toLowerCase();
+        if (latestDate.includes('month') || latestDate.includes('year')) {
+            metrics.postFrequency = 'Inactive 30+ days';
+        }
+    }
+
+    // ---- Hours audit ----
+    if (data.weeklyHours) {
+        const dayCount = Object.keys(data.weeklyHours).length;
+        metrics.daysWithHours = dayCount;
+        if (dayCount >= 7) {
+            metrics.hoursCompleteness = 'All 7 days set';
+        } else if (dayCount >= 5) {
+            metrics.hoursCompleteness = 'Open days only';
+        } else if (dayCount >= 1) {
+            metrics.hoursCompleteness = 'Some days';
+        }
+    }
+
+    // ---- Attributes audit ----
+    if (data.attributes) {
+        metrics.attributeSectionsCount = Object.keys(data.attributes).length;
+        metrics.totalAttributesCount = Object.values(data.attributes)
+            .reduce((sum, items) => sum + items.length, 0);
+        // Consider "complete" if 5+ sections
+        metrics.attributesComplete = metrics.attributeSectionsCount >= 5;
+    }
+
+    return metrics;
+}
+
 // ========== MASTER ORCHESTRATOR ==========
 
 export async function extractAllPlaceData(page, log, deepScrape = false) {
@@ -1184,8 +1375,30 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         qa = await extractQA(page, log);
     }
 
-    // Build extraction completeness summary
-    const allFields = { ...coreInfo, ...ratings, ...hours, ...photos, ...attributes, ...popularTimes, ...desc, ...related, ...posts, ...products, ...services, ...qa };
+    // Profile claimed/verified
+    const profileClaimed = await extractProfileClaimed(page, log);
+
+    // Build raw data
+    const allFields = {
+        ...coreInfo,
+        ...ratings,
+        ...hours,
+        ...photos,
+        ...attributes,
+        ...popularTimes,
+        ...desc,
+        ...related,
+        ...posts,
+        ...products,
+        ...services,
+        ...qa,
+        profileClaimed,
+    };
+
+    // Compute audit metrics from the scraped data
+    const auditMetrics = computeAuditMetrics(allFields);
+
+    // Extraction completeness
     const fieldCount = Object.keys(allFields).length;
     const populatedCount = Object.values(allFields).filter((v) =>
         v !== null && v !== undefined && v !== false && !(Array.isArray(v) && v.length === 0),
@@ -1193,6 +1406,7 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
 
     return {
         ...allFields,
+        auditMetrics,
         selectorVersion: SELECTOR_VERSION,
         extractionCompleteness: {
             totalFields: fieldCount,
