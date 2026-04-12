@@ -1146,56 +1146,167 @@ export async function extractDescription(page, log) {
  * Fallback: search Google for the business name and extract description from Knowledge Panel.
  */
 async function extractFromKnowledgePanel(page, log, businessName) {
+    // Returns just the description string (called by extractDescription)
+    const kpData = await extractFullKnowledgePanel(page, log, businessName);
+    return kpData?.description || null;
+}
+
+/**
+ * Full Knowledge Panel extraction — gets everything Maps doesn't show:
+ * description, social profiles, third-party ratings, Google Posts with dates, etc.
+ */
+export async function extractFullKnowledgePanel(page, log, businessName) {
+    const result = {
+        description: null,
+        socialProfiles: [],
+        thirdPartyRatings: [],
+        kpPosts: [],
+        kpBusyness: null,
+    };
+
+    if (!businessName) return result;
+
     try {
         const currentUrl = page.url();
         const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(businessName)}`;
 
+        log.info(`Extracting Knowledge Panel data from Google Search: "${businessName}"`);
         await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await sleep(2000);
+        await sleep(2500);
 
-        const description = await page.evaluate(() => {
-            // Try Knowledge Panel description selectors
-            const selectors = [
-                '[data-attrid="kc:/location/location:description"] span',
-                '[data-attrid*="merchant_description"] span',
-                '.kno-rdesc span',
-                '[data-attrid="description"] span',
-                '[data-attrid*="description"]',
-            ];
-            for (const sel of selectors) {
-                const el = document.querySelector(sel);
-                if (el) {
-                    const text = el.textContent?.trim();
-                    if (text && text.length > 10) return text;
+        const kpData = await page.evaluate(() => {
+            const data = {
+                description: null,
+                socialProfiles: [],
+                thirdPartyRatings: [],
+                kpPosts: [],
+                kpBusyness: null,
+            };
+
+            // === DESCRIPTION ===
+            // Try merchant_description first (this is the owner-written description)
+            const merchDesc = document.querySelector('[data-attrid="kc:/local:merchant_description"]');
+            if (merchDesc) {
+                let text = merchDesc.textContent?.trim() || '';
+                // Remove the business name prefix and "From..." prefix
+                text = text.replace(/^From\s+.+?"/, '"').trim();
+                // Extract just the quoted description
+                const quoteMatch = text.match(/"([^"]+)/);
+                if (quoteMatch) {
+                    data.description = quoteMatch[1].replace(/\.\.\.\s*More$/, '').trim();
+                } else {
+                    // Remove prefix labels
+                    text = text.replace(/^From\s+[^"]+/, '').replace(/^\s*"?/, '').replace(/"?\s*More\s*$/, '').trim();
+                    if (text.length > 10) data.description = text;
                 }
             }
-
-            // Try "From the business" section in KP
-            const allDivs = document.querySelectorAll('div');
-            for (const div of allDivs) {
-                if (div.children.length <= 3) {
-                    const text = div.textContent?.trim();
-                    if (text && text.startsWith('From the business')) {
-                        return text.replace('From the business', '').trim();
+            // Fallback selectors
+            if (!data.description) {
+                const descSelectors = [
+                    '[data-attrid="kc:/location/location:description"] span',
+                    '.kno-rdesc span',
+                    '[data-attrid="description"] span',
+                ];
+                for (const sel of descSelectors) {
+                    const el = document.querySelector(sel);
+                    if (el) {
+                        const t = el.textContent?.trim();
+                        if (t && t.length > 10) { data.description = t; break; }
                     }
                 }
             }
 
-            return null;
+            // === SOCIAL MEDIA PROFILES ===
+            const socialEl = document.querySelector('[data-attrid="kc:/common/topic:social media presence"]');
+            if (socialEl) {
+                const links = socialEl.querySelectorAll('a');
+                for (const link of links) {
+                    const name = link.textContent?.trim();
+                    const href = link.href;
+                    if (name && href && !href.includes('google.com')) {
+                        data.socialProfiles.push({ platform: name, url: href });
+                    }
+                }
+            }
+
+            // === THIRD-PARTY RATINGS (Justdial, Practo, etc.) ===
+            const ratingsEl = document.querySelector('[data-attrid="kc:/location/location:third_party_aggregator_ratings"]');
+            if (ratingsEl) {
+                const text = ratingsEl.textContent?.trim() || '';
+                // Parse patterns like "4.6/5 Justdial · 113 votes" or "4.8/5 Practo · 50 votes"
+                const ratingParts = text.split(/(?=\d+\.?\d*\/\d)/g);
+                for (const part of ratingParts) {
+                    const match = part.match(/(\d+\.?\d*)\/(\d+)\s*([A-Za-z]+)\s*·?\s*(\d[\d,]*)\s*(?:votes|reviews)/i);
+                    if (match) {
+                        data.thirdPartyRatings.push({
+                            platform: match[3],
+                            rating: parseFloat(match[1]),
+                            maxRating: parseInt(match[2], 10),
+                            reviewCount: parseInt(match[4].replace(/,/g, ''), 10),
+                        });
+                    }
+                }
+            }
+
+            // === GOOGLE POSTS FROM KP (with exact dates) ===
+            const postsEl = document.querySelector('[data-attrid="kc:/local:posts"]');
+            if (postsEl) {
+                const text = postsEl.textContent?.trim() || '';
+                // Parse posts — they appear as "text... Date\nCTA\ntext... Date\nCTA"
+                // Each post has text, a date like "Apr 3, 2026", and a CTA like "Call now"
+                const postBlocks = text.split(/(?=[A-Z][a-z]{2}\s+\d{1,2},\s*\d{4})/g);
+                // Alternative: look for date patterns
+                const datePattern = /([A-Z][a-z]{2}\s+\d{1,2},?\s*\d{4})/g;
+                const dates = text.match(datePattern) || [];
+
+                // Get individual post elements if possible
+                const postLinks = postsEl.querySelectorAll('a[href*="posts"], div[data-post-id]');
+                if (postLinks.length > 0) {
+                    for (const pl of postLinks) {
+                        data.kpPosts.push({
+                            text: pl.textContent?.trim()?.substring(0, 200),
+                            url: pl.href || null,
+                        });
+                    }
+                } else if (dates.length > 0) {
+                    // Parse from flat text using dates as separators
+                    for (let i = 0; i < dates.length; i++) {
+                        const dateStr = dates[i];
+                        const dateIdx = text.indexOf(dateStr);
+                        // Get the text before this date (post content)
+                        const prevDateIdx = i > 0 ? text.indexOf(dates[i - 1]) + dates[i - 1].length : 0;
+                        const postText = text.substring(prevDateIdx, dateIdx).replace(/Call now|Learn more|Book|Sign up|Order online/gi, '').trim();
+                        if (postText.length > 5) {
+                            data.kpPosts.push({
+                                text: postText.substring(0, 200),
+                                date: dateStr,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // === BUSYNESS ===
+            const busyEl = document.querySelector('[data-attrid="kc:/local:busyness"]');
+            if (busyEl) {
+                data.kpBusyness = busyEl.textContent?.trim()?.substring(0, 100);
+            }
+
+            return data;
         });
 
-        // Navigate back to the Maps page
+        Object.assign(result, kpData);
+
+        // Navigate back to Maps
         await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
         await sleep(1000);
 
-        if (description) {
-            log.info(`Extracted description from Knowledge Panel: "${description.substring(0, 80)}..."`);
-        }
-        return description;
+        log.info(`KP: description=${!!result.description}, socialProfiles=${result.socialProfiles.length}, thirdPartyRatings=${result.thirdPartyRatings.length}, posts=${result.kpPosts.length}`);
     } catch (err) {
         log.warning(`Knowledge Panel extraction failed: ${err.message}`);
-        return null;
     }
+
+    return result;
 }
 
 // ========== RELATED PLACES ==========
@@ -1899,6 +2010,18 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         }
     }
 
+    // Knowledge Panel extraction — gets description, social profiles, third-party ratings, posts
+    let knowledgePanel = {
+        description: null, socialProfiles: [], thirdPartyRatings: [], kpPosts: [], kpBusyness: null,
+    };
+    if (coreInfo.name) {
+        knowledgePanel = await extractFullKnowledgePanel(page, log, coreInfo.name);
+        // If Maps didn't find description but KP did, use KP's
+        if (!desc.description && knowledgePanel.description) {
+            desc.description = knowledgePanel.description;
+        }
+    }
+
     // Build raw data
     const allFields = {
         ...coreInfo,
@@ -1915,6 +2038,9 @@ export async function extractAllPlaceData(page, log, deepScrape = false) {
         ...qa,
         profileClaimed,
         websiteInfo,
+        socialProfiles: knowledgePanel.socialProfiles,
+        thirdPartyRatings: knowledgePanel.thirdPartyRatings,
+        kpPosts: knowledgePanel.kpPosts,
     };
 
     // Compute audit metrics from the scraped data
