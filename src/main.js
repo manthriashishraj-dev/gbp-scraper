@@ -12,6 +12,7 @@ import {
     REQUEST_HANDLER_TIMEOUT,
     MAX_RETRIES,
 } from './constants.js';
+import { buildCityQueries } from './urlBuilder.js';
 
 // Register stealth plugin to evade bot detection
 puppeteerExtra.use(stealthPlugin());
@@ -22,45 +23,70 @@ await Actor.init();
 
 const input = (await Actor.getInput()) || {};
 const {
+    scrapeMode = 'deep',
+    city = '',
+    businessType = '',
     searchQueries = [],
     placeUrls = [],
     maxResults = 20,
     language = 'en',
-    deepScrape = false,
+    deepScrape = true,
     debugSelectors = false,
     maxConcurrency = 3,
 } = input;
 
-if (searchQueries.length === 0 && placeUrls.length === 0) {
-    throw new Error(
-        'At least one of "searchQueries" or "placeUrls" must be provided. ' +
-        'Example: { "searchQueries": ["restaurants in Austin, TX"] } or ' +
-        '{ "placeUrls": ["https://www.google.com/maps/place/..."] }',
-    );
-}
+// ========== INPUT VALIDATION ==========
 
-log.info(`Starting GBP Scraper — ${searchQueries.length} search queries, ${placeUrls.length} direct URLs`);
-log.info(`Settings: maxResults=${maxResults}, language=${language}, deepScrape=${deepScrape}, debugSelectors=${debugSelectors}`);
+if ((city.trim() && !businessType.trim()) || (!city.trim() && businessType.trim())) {
+    throw new Error('Both "city" and "businessType" must be provided together. Example: { "city": "Hyderabad", "businessType": "dentist" }');
+}
 
 // ========== BUILD REQUEST LIST ==========
 
 const requests = [];
 
+// Priority 1: City + BusinessType → auto-expand to area searches
+if (city.trim() && businessType.trim()) {
+    const areaUrls = buildCityQueries(businessType.trim(), city.trim(), language);
+    log.info(`City mode: "${businessType}" in "${city}" → ${areaUrls.length} area queries (scrapeMode: ${scrapeMode})`);
+    for (const { url, searchString } of areaUrls) {
+        requests.push({
+            url,
+            label: LABELS.SEARCH_RESULTS,
+            userData: { searchQuery: searchString, maxResults, scrapeMode, deepScrape, debugSelectors },
+        });
+    }
+}
+
+// Priority 2: Search queries → direct search
 for (const query of searchQueries) {
     requests.push({
         url: SEARCH_URL_TEMPLATE(query, language),
         label: LABELS.SEARCH_RESULTS,
-        userData: { searchQuery: query, maxResults, deepScrape, debugSelectors },
+        userData: { searchQuery: query, maxResults, scrapeMode, deepScrape, debugSelectors },
     });
 }
 
+// Priority 3: Place URLs → always deep, direct profile scrape
 for (const url of placeUrls) {
     requests.push({
         url,
         label: LABELS.PLACE_DETAIL,
-        userData: { deepScrape, debugSelectors },
+        userData: { deepScrape: true, debugSelectors },
     });
 }
+
+if (requests.length === 0) {
+    throw new Error(
+        'No input provided. Use one of:\n' +
+        '  1. "city" + "businessType" (e.g., "Hyderabad" + "dentist") → auto-expands to all areas\n' +
+        '  2. "searchQueries" (e.g., ["restaurants in Austin, TX"]) → direct search\n' +
+        '  3. "placeUrls" (direct Google Maps place URLs) → full profile scrape',
+    );
+}
+
+log.info(`Starting GBP Scraper — ${requests.length} total requests (mode: ${scrapeMode})`);
+log.info(`Settings: maxResults=${maxResults}, language=${language}, scrapeMode=${scrapeMode}, deepScrape=${deepScrape}`);
 
 // ========== CONFIGURE CRAWLER ==========
 

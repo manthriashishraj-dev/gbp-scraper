@@ -1,58 +1,82 @@
 {
   "title": "Google Business Profile Scraper Input",
-  "description": "Configure search queries or direct place URLs to scrape Google Business Profiles.",
+  "description": "Scrape GBP listings by city+niche, search queries, or direct place URLs. Quick mode for fast card data, Deep mode for full 62+ field extraction.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
+    "scrapeMode": {
+      "title": "Scrape Mode",
+      "type": "string",
+      "description": "Quick: extracts 13 fields per business from search results (fast, cheap). Deep: visits each profile for full 62+ fields including reviews, posts, photos, attributes.",
+      "editor": "select",
+      "enum": ["quick", "deep"],
+      "enumTitles": ["Quick scan (card data only — fast)", "Deep scrape (all 62+ fields — visits each profile)"],
+      "default": "deep"
+    },
+    "city": {
+      "title": "City",
+      "type": "string",
+      "description": "Select a city. The scraper auto-expands into all areas/neighborhoods for comprehensive coverage. Use with Business Type.",
+      "editor": "select",
+      "enum": ["", "Mumbai", "Delhi", "Bengaluru", "Hyderabad", "Chennai", "Kolkata", "Pune", "Ahmedabad", "Jaipur", "Lucknow", "Surat", "Kanpur", "Nagpur", "Indore", "Bhopal", "Visakhapatnam", "Patna", "Vadodara", "Ghaziabad", "Ludhiana", "Agra", "Nashik", "Faridabad", "Meerut", "Rajkot", "Varanasi", "Srinagar", "Aurangabad", "Dhanbad", "Amritsar", "Allahabad", "Ranchi", "Howrah", "Coimbatore", "Gwalior", "Vijayawada", "Jodhpur", "Madurai", "Raipur", "Kochi", "Chandigarh", "Mysuru", "Warangal"],
+      "enumTitles": ["(none)", "Mumbai — Tier 1", "Delhi — Tier 1", "Bengaluru — Tier 1", "Hyderabad — Tier 1", "Chennai — Tier 1", "Kolkata — Tier 1", "Pune — Tier 1", "Ahmedabad — Tier 1", "Jaipur — Tier 2", "Lucknow — Tier 2", "Surat — Tier 2", "Kanpur — Tier 2", "Nagpur — Tier 2", "Indore — Tier 2", "Bhopal — Tier 2", "Visakhapatnam — Tier 2", "Patna — Tier 2", "Vadodara — Tier 2", "Ghaziabad — Tier 2", "Ludhiana — Tier 2", "Agra — Tier 2", "Nashik — Tier 2", "Faridabad — Tier 2", "Meerut — Tier 2", "Rajkot — Tier 2", "Varanasi — Tier 2", "Srinagar — Tier 2", "Aurangabad — Tier 2", "Dhanbad — Tier 2", "Amritsar — Tier 2", "Allahabad — Tier 2", "Ranchi — Tier 2", "Howrah — Tier 2", "Coimbatore — Tier 2", "Gwalior — Tier 2", "Vijayawada — Tier 2", "Jodhpur — Tier 2", "Madurai — Tier 2", "Raipur — Tier 2", "Kochi — Tier 2", "Chandigarh — Tier 2", "Mysuru — Tier 2", "Warangal — Tier 3"],
+      "default": ""
+    },
+    "businessType": {
+      "title": "Business Type / Niche",
+      "type": "string",
+      "description": "Type of business to search (e.g., dentist, restaurant, hotel, gym, salon). Required when City is set.",
+      "editor": "textfield",
+      "default": ""
+    },
     "searchQueries": {
       "title": "Search Queries",
       "type": "array",
-      "description": "Google Maps search queries (e.g., 'restaurants in Austin, TX'). Each query will search Google Maps and extract listings.",
+      "description": "Google Maps search queries (e.g., 'restaurants in Austin, TX'). Alternative to city+businessType.",
       "editor": "stringList",
-      "items": { "type": "string" },
-      "prefill": ["restaurants in Austin, TX"]
+      "items": { "type": "string" }
     },
     "placeUrls": {
-      "title": "Place URLs",
+      "title": "Place URLs (Direct)",
       "type": "array",
-      "description": "Direct Google Maps place URLs to scrape.",
+      "description": "Direct Google Maps place URLs. Always uses deep scrape mode.",
       "editor": "stringList",
       "items": { "type": "string" }
     },
     "maxResults": {
-      "title": "Max Results Per Query",
+      "title": "Max Results Per Search",
       "type": "integer",
-      "description": "Maximum number of listings to extract per search query.",
+      "description": "Maximum listings per search query / area.",
       "default": 20,
       "minimum": 1,
-      "maximum": 120,
+      "maximum": 500,
       "editor": "number"
     },
     "language": {
       "title": "Language",
       "type": "string",
-      "description": "Language code for Google Maps (e.g., 'en', 'es', 'fr').",
+      "description": "Language code for Google Maps (e.g., 'en', 'hi', 'te').",
       "default": "en",
       "editor": "textfield"
     },
     "deepScrape": {
-      "title": "Deep Scrape",
+      "title": "Deep Scrape (Reviews, Photos, Posts)",
       "type": "boolean",
-      "description": "If enabled, scrapes reviews, photos, and Q&A in detail. Slower but more comprehensive.",
-      "default": false,
+      "description": "In deep mode: enables full review loading, photo gallery, posts pagination. Slower but complete.",
+      "default": true,
       "editor": "checkbox"
     },
     "debugSelectors": {
       "title": "Debug Selectors",
       "type": "boolean",
-      "description": "If enabled, runs a selector health audit and saves a report to the key-value store.",
+      "description": "Run selector health audit and save report to key-value store.",
       "default": false,
       "editor": "checkbox"
     },
     "maxConcurrency": {
       "title": "Max Concurrency",
       "type": "integer",
-      "description": "Maximum number of pages open in parallel. Lower values reduce bot detection risk.",
+      "description": "Pages open in parallel. Lower = less bot detection risk.",
       "default": 3,
       "minimum": 1,
       "maximum": 10,
