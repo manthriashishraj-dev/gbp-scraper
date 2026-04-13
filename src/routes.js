@@ -167,7 +167,7 @@ router.addHandler(LABELS.SEARCH_RESULTS, async ({ page, request, log, crawler, p
         uniqueKey: card.googleMapsUrl.split('?')[0], // cross-area dedup
         userData: { searchQuery, deepScrape, debugSelectors, quickData: card, rank: i + 1 },
     })));
-    log.info(`Deep mode: enqueued ${limitedCards.length} profiles for full scrape`);
+    log.info(`Deep mode: enqueued ${cards.length} profiles for full scrape`);
 });
 
 // ========== PLACE DETAIL HANDLER (API INTERCEPTION) ==========
