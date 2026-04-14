@@ -187,6 +187,21 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
         }
     });
 
+    // ===== STEP 1a: Pre-warm cookies for direct profile URLs =====
+    // When called with placeUrls (direct profile URL) instead of from a search,
+    // Google often returns a stripped 1333-byte placeholder because no Google
+    // cookies are set yet. Warm up by visiting google.com first.
+    const isDirectProfileUrl = request.url.includes('/maps/place/') && !request.userData.searchQuery;
+    if (isDirectProfileUrl) {
+        log.info('Direct profile URL detected — pre-warming cookies via google.com...');
+        try {
+            await page.goto('https://www.google.com/', { waitUntil: 'networkidle2', timeout: 30000 });
+            await sleep(1000);
+        } catch (err) {
+            log.warning(`Cookie pre-warm failed: ${err.message}`);
+        }
+    }
+
     // Navigate to the Maps page
     await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 120000 });
     await sleep(1500);
@@ -195,9 +210,10 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
     // The FIRST navigation to Google (cold, no cookies) returns a stripped ~42KB
     // response with NO reviews. After cookies are established, subsequent loads
     // return the full ~98KB response WITH reviews and richer data.
-    if (apiResponseText && apiResponseText.length < 60000) {
-        log.info(`API response small (${apiResponseText.length} chars) — reloading for full data (cookie warmup)...`);
-        if (apiResponseText.length < 5000) {
+    // Also handles 1333-byte bot-blocked responses by retrying with warmup.
+    if (!apiResponseText || apiResponseText.length < 60000) {
+        log.info(`API response small (${apiResponseText?.length || 0} chars) — reloading for full data (cookie warmup)...`);
+        if (apiResponseText && apiResponseText.length < 5000) {
             log.warning(`Very small response — might be error/consent page. Content: ${apiResponseText.substring(0, 300)}`);
         }
         apiResponseText = null;
@@ -214,6 +230,17 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
             await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 120000 });
             await sleep(1500);
             log.info(`After warmup: ${apiResponseText?.length || 0} chars`);
+        }
+
+        // If STILL small after warmup, try one more time with explicit search navigation
+        if (!apiResponseText || apiResponseText.length < 10000) {
+            log.info('Still small — trying Google Maps homepage warmup...');
+            await page.goto('https://www.google.com/maps', { waitUntil: 'networkidle2', timeout: 30000 });
+            await sleep(2000);
+            apiResponseText = null;
+            await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 120000 });
+            await sleep(2000);
+            log.info(`After Maps homepage warmup: ${apiResponseText?.length || 0} chars`);
         }
     }
 
