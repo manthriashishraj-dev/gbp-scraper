@@ -34,7 +34,7 @@ export const LABELS = {
 
 export const MAX_RETRIES = 3;
 export const NAVIGATION_TIMEOUT = 120000;  // 2 min — residential proxy is slower
-export const REQUEST_HANDLER_TIMEOUT = 600000;  // 10 min — deep scrape with KP + photos + website
+export const REQUEST_HANDLER_TIMEOUT = 360000;  // 6 min — deep scrape with KP + photos + website
 
 export function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));

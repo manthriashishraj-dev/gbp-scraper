@@ -189,7 +189,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
 
     // Navigate to the Maps page
     await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 120000 });
-    await sleep(3000);
+    await sleep(1500);
 
     // ===== STEP 1b: Cookie warmup — reload if response is too small =====
     // The FIRST navigation to Google (cold, no cookies) returns a stripped ~42KB
@@ -202,17 +202,17 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
         }
         apiResponseText = null;
         await page.reload({ waitUntil: 'networkidle2', timeout: 120000 });
-        await sleep(3000);
+        await sleep(1500);
         log.info(`After reload: ${apiResponseText?.length || 0} chars`);
 
         // If still small, try navigating to google.com first then back
         if (!apiResponseText || apiResponseText.length < 10000) {
             log.info('Still small — warming up with google.com visit...');
             await page.goto('https://www.google.com/', { waitUntil: 'networkidle2', timeout: 30000 });
-            await sleep(2000);
+            await sleep(1000);
             apiResponseText = null;
             await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 120000 });
-            await sleep(3000);
+            await sleep(1500);
             log.info(`After warmup: ${apiResponseText?.length || 0} chars`);
         }
     }
@@ -292,9 +292,12 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
     if (deepScrape && business.reviewCount > 0) {
         log.info(`Loading all ${business.reviewCount} reviews via Maps Reviews tab...`);
         try {
-            // Navigate back to the Maps place page (we're on Google Search after KP)
-            await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 120000 });
-            await sleep(3000);
+            // Make sure we're on Overview before clicking Reviews
+            await page.evaluate(() => {
+                const tabs = document.querySelectorAll('button.hh2c6');
+                for (const t of tabs) { if (t.textContent?.trim() === 'Overview') { t.click(); return; } }
+            });
+            await sleep(500);
 
             // Click the Reviews tab
             const reviewsTabClicked = await page.evaluate(() => {
@@ -319,13 +322,13 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
 
             if (reviewsTabClicked) {
                 log.info(`Clicked Reviews tab via: ${reviewsTabClicked}`);
-                await sleep(3000);
+                await sleep(1500);
 
                 // Sort by Newest for chronological order
                 const sortBtn = await page.$('button[aria-label*="Sort"], button.g88MCb');
                 if (sortBtn) {
                     await sortBtn.click();
-                    await sleep(1000);
+                    await sleep(500);
                     await page.evaluate(() => {
                         const items = document.querySelectorAll('div[role="menuitemradio"], div[data-index]');
                         for (const item of items) {
@@ -334,7 +337,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                             }
                         }
                     });
-                    await sleep(3000);
+                    await sleep(1500);
                 }
 
                 // Scroll to load ALL reviews
@@ -352,12 +355,12 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                     if (count >= maxReviews) break;
                     if (count === prevCount) {
                         stuck++;
-                        if (stuck >= 20) break;
+                        if (stuck >= 15) break;
                     } else {
                         stuck = 0;
                     }
                     prevCount = count;
-                    await sleep(500);
+                    await sleep(300);
                 }
 
                 log.info(`Loaded ${prevCount} review cards in DOM`);
@@ -367,7 +370,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                     document.querySelectorAll('button.w8nwRe, button[aria-label="See more"], button.review-more-link')
                         .forEach(b => { try { b.click(); } catch {} });
                 }).catch(() => {});
-                await sleep(1000);
+                await sleep(500);
 
                 // DOM scrape all reviews with FULL detail
                 const domReviews = await page.evaluate(() => {
@@ -489,7 +492,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                 const tabs = document.querySelectorAll('button.hh2c6');
                 for (const t of tabs) { if (t.textContent?.trim() === 'Overview') { t.click(); return; } }
             });
-            await sleep(2000);
+            await sleep(1000);
 
             // Scroll down to find the review summary section
             for (let i = 0; i < 10; i++) {
@@ -497,7 +500,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                     const s = document.querySelector('.m6QErb.DxyBCb');
                     if (s) s.scrollTo(0, s.scrollHeight);
                 });
-                await sleep(300);
+                await sleep(200);
             }
 
             const summaryData = await page.evaluate(() => {
@@ -540,7 +543,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
             // Navigate back to place page if needed
             if (!page.url().includes('maps/place')) {
                 await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 120000 });
-                await sleep(3000);
+                await sleep(1500);
             }
             // Click About tab
             const aboutClicked = await page.evaluate(() => {
@@ -549,7 +552,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                 return false;
             });
             if (aboutClicked) {
-                await sleep(2000);
+                await sleep(1000);
                 business.attributes = await page.evaluate(() => {
                     const result = {};
                     const sections = document.querySelectorAll('.iP2t7d');
@@ -575,17 +578,13 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
     // ===== STEP 3b3: Load ALL posts via localposts API scroll =====
     if (deepScrape && business.posts && business.posts.length > 0) {
         try {
-            // Navigate back to Maps place page
-            await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 120000 });
-            await sleep(3000);
-
             // Scroll overview to find posts section
             for (let i = 0; i < 20; i++) {
                 await page.evaluate(() => {
                     const s = document.querySelector('.m6QErb.DxyBCb');
                     if (s) s.scrollTo(0, s.scrollHeight);
                 });
-                await sleep(300);
+                await sleep(200);
             }
 
             // Intercept localposts API
@@ -605,7 +604,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                 const btn = document.querySelector('button[aria-label="See local posts"]');
                 if (btn) btn.click();
             });
-            await sleep(3000);
+            await sleep(1500);
 
             // Scroll the post detail panel to trigger pagination
             let prevCount = localPostTexts.length;
@@ -618,13 +617,13 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                         }
                     });
                 });
-                await sleep(400);
+                await sleep(300);
                 if (localPostTexts.length > prevCount) {
                     stuck = 0;
                     prevCount = localPostTexts.length;
                 } else {
                     stuck++;
-                    if (stuck >= 25) break;
+                    if (stuck >= 15) break;
                 }
             }
 
@@ -672,7 +671,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                 const back = document.querySelector('button[aria-label="Back"]');
                 if (back) back.click();
             });
-            await sleep(1000);
+            await sleep(500);
 
             page.off('response', localPostHandler);
         } catch (err) {
@@ -684,23 +683,19 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
     if (deepScrape && business.photoCount > 0) {
         log.info(`Loading photos (total: ${business.photoCount})...`);
         try {
-            // Navigate to the Maps place page
-            await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 120000 });
-            await sleep(3000);
-
             // Click cover photo to enter gallery
             await page.evaluate(() => {
                 const btn = document.querySelector('button.aoRNLd');
                 if (btn) btn.click();
             });
-            await sleep(3000);
+            await sleep(1500);
 
             // Click "All" tab in gallery
             await page.evaluate(() => {
                 const tabs = document.querySelectorAll('button.hh2c6');
                 for (const t of tabs) { if (t.textContent?.trim() === 'All') { t.click(); return; } }
             });
-            await sleep(2000);
+            await sleep(1000);
 
             // Scroll gallery to load photos
             let prevPhotoCount = 0;
@@ -712,10 +707,10 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                     return document.querySelectorAll('a.OKAoZd, [style*="background-image"][style*="googleusercontent"]').length;
                 });
                 if (count >= (business.photoCount || 100)) break;
-                if (count === prevPhotoCount) { photoStuck++; if (photoStuck >= 15) break; }
+                if (count === prevPhotoCount) { photoStuck++; if (photoStuck >= 12) break; }
                 else { photoStuck = 0; }
                 prevPhotoCount = count;
-                await sleep(400);
+                await sleep(300);
             }
 
             // Also scroll "By owner" tab
@@ -723,13 +718,13 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                 const tabs = document.querySelectorAll('button.hh2c6');
                 for (const t of tabs) { if (t.textContent?.trim() === 'By owner') { t.click(); return; } }
             });
-            await sleep(2000);
+            await sleep(1000);
             for (let i = 0; i < 50; i++) {
                 await page.evaluate(() => {
                     const s = document.querySelector('.m6QErb.DxyBCb');
                     if (s) s.scrollTo(0, s.scrollHeight);
                 });
-                await sleep(400);
+                await sleep(300);
             }
 
             // Extract all photo URLs from gallery
@@ -753,7 +748,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                 const contribUrl = `https://www.google.com/maps/contrib/${business.ownerContributorId}/photos`;
                 log.info(`Loading owner photos from contributor: ${contribUrl.substring(0, 80)}`);
                 await page.goto(contribUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-                await sleep(3000);
+                await sleep(1500);
 
                 // Scroll contributor page
                 let prevC = 0, stuckC = 0;
@@ -766,7 +761,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                     });
                     if (c === prevC) { stuckC++; if (stuckC >= 12) break; } else { stuckC = 0; }
                     prevC = c;
-                    await sleep(400);
+                    await sleep(300);
                 }
 
                 // Extract contributor photos
@@ -824,7 +819,7 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
             }
             if (attempt < 2) {
                 log.warning(`KP attempt ${attempt} empty — retrying...`);
-                await sleep(2000);
+                await sleep(1000);
             }
         }
     }
