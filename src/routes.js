@@ -114,9 +114,11 @@ router.addHandler(LABELS.SEARCH_RESULTS, async ({ page, request, log, crawler, p
             const websiteEl = card.querySelector('a[data-value="Website"], a[href*="http"]:not([href*="google.com"])');
             const website = websiteEl?.href || null;
 
-            // Extract placeId and featureId from URL
+            // Extract placeId, featureId, and coordinates from URL
             const placeIdMatch = url.match(/ChIJ[A-Za-z0-9_-]+/);
             const fidMatch = url.match(/!1s(0x[a-f0-9]+:0x[a-f0-9]+)/);
+            const latMatch = url.match(/!3d(-?\d+\.?\d*)/);
+            const lngMatch = url.match(/!4d(-?\d+\.?\d*)/);
 
             results.push({
                 businessName: name,
@@ -124,6 +126,8 @@ router.addHandler(LABELS.SEARCH_RESULTS, async ({ page, request, log, crawler, p
                 featureId: fidMatch ? fidMatch[1] : null,
                 primaryCategory: category,
                 address,
+                latitude: latMatch ? parseFloat(latMatch[1]) : null,
+                longitude: lngMatch ? parseFloat(lngMatch[1]) : null,
                 rating,
                 reviewCount,
                 phone,
