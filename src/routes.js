@@ -50,7 +50,7 @@ router.addHandler(LABELS.SEARCH_RESULTS, async ({ page, request, log, crawler, p
     }
 
     // Extract card-level data from each result in the feed
-    const cards = await page.evaluate(() => {
+    const cards = await page.evaluate((searchQueryStr) => {
         const results = [];
         const seen = new Set();
         const items = document.querySelectorAll('a.hfpxzc');
@@ -60,57 +60,120 @@ router.addHandler(LABELS.SEARCH_RESULTS, async ({ page, request, log, crawler, p
             if (!url || seen.has(url)) continue;
             seen.add(url);
 
-            // The parent container holds all the card data
             const card = link.closest('.Nv2PK') || link.parentElement;
             if (!card) continue;
 
-            // Business name — from aria-label on the link or nearby heading
+            // === Business name ===
             const name = link.getAttribute('aria-label') || card.querySelector('.qBF1Pd, .fontHeadlineSmall')?.textContent?.trim() || null;
 
-            // Rating — from aria-label like "4.8 stars"
-            const ratingEl = card.querySelector('.MW4etd, span[role="img"][aria-label*="star"]');
+            // === Rating ===
+            const ratingEl = card.querySelector('.MW4etd');
             let rating = null;
             if (ratingEl) {
-                const text = ratingEl.textContent?.trim() || ratingEl.getAttribute('aria-label') || '';
-                const m = text.match(/([\d.]+)/);
+                const m = ratingEl.textContent?.trim().match(/([\d.]+)/);
                 if (m) rating = parseFloat(m[1]);
             }
 
-            // Review count — from "(123)" pattern
-            const reviewEl = card.querySelector('.UY7F9');
+            // === Review count — multiple strategies ===
             let reviewCount = null;
+            // Strategy 1: .UY7F9 "(1,017)"
+            const reviewEl = card.querySelector('.UY7F9');
             if (reviewEl) {
                 const m = reviewEl.textContent?.match(/\(([\d,]+)\)/);
                 if (m) reviewCount = parseInt(m[1].replace(/,/g, ''));
             }
+            // Strategy 2: combined rating+count text "4.8(436)"
+            if (reviewCount === null) {
+                const combined = card.querySelector('.e4rVHe, .ZkP5Je');
+                if (combined) {
+                    const m = combined.textContent?.match(/\(([\d,]+)\)/);
+                    if (m) reviewCount = parseInt(m[1].replace(/,/g, ''));
+                }
+            }
+            // Strategy 3: search entire card text for "(number)" pattern next to rating
+            if (reviewCount === null) {
+                const cardText = card.textContent || '';
+                const m = cardText.match(/[\d.]+\(([\d,]+)\)/);
+                if (m) reviewCount = parseInt(m[1].replace(/,/g, ''));
+            }
 
-            // Category + Address — from the info lines below the name
-            const infoSpans = card.querySelectorAll('.W4Efsd span, .W4Efsd .lund');
+            // === Parse W4Efsd lines for category, address, open status, phone ===
+            // Line structure:
+            //   W4Efsd[0]: "4.8(436)" — rating (skip)
+            //   W4Efsd[1]: "Dental clinic · opp. Vijaya TheatreOpen · Closes 9:30 pm · 090009 44131" — ALL info
+            //   W4Efsd[2]: "Dental clinic · opp. Vijaya Theatre" — category + address
+            //   W4Efsd[3]: "Open · Closes 9:30 pm · 090009 44131" — status + phone
+            const w4Lines = card.querySelectorAll('.W4Efsd');
             let category = null;
             let address = null;
+            let fullAddress = null;
             let phone = null;
-            for (const span of infoSpans) {
-                const text = span.textContent?.trim();
-                if (!text || text.length < 2) continue;
-                // Phone pattern
-                if (!phone && text.match(/^\+?\d[\d\s()-]{7,}/)) {
-                    phone = text;
-                }
-                // Address (contains comma or number)
-                else if (!address && (text.includes(',') || text.match(/^\d/)) && text.length > 10) {
-                    address = text;
-                }
-                // Category (short text, no comma, not a price indicator)
-                else if (!category && text.length > 2 && text.length < 40 && !text.includes(',') && !text.match(/^[\$₹€£]/) && !text.match(/^\d/) && !text.includes('·')) {
-                    category = text;
+            let openStatus = null;
+            let hoursHint = null;
+
+            // Parse the 3rd W4Efsd line (category + address)
+            if (w4Lines.length >= 3) {
+                const catAddrText = w4Lines[2]?.textContent?.trim() || '';
+                // Format: "Dental clinic · Vijaya Talkies, Opp:, Bus Stand Road"
+                const parts = catAddrText.split('·').map(p => p.trim()).filter(Boolean);
+                if (parts.length >= 1) category = parts[0];
+                if (parts.length >= 2) address = parts.slice(1).join(', ').trim();
+            }
+
+            // Parse the 4th W4Efsd line (open status + phone)
+            if (w4Lines.length >= 4) {
+                const statusText = w4Lines[3]?.textContent?.trim() || '';
+                // Format: "Open · Closes 9:30 pm · 090009 44131" or "Open 24 hours · 098854 32424"
+                if (statusText.toLowerCase().includes('open')) openStatus = 'Open';
+                if (statusText.toLowerCase().includes('closed')) openStatus = 'Closed';
+                if (statusText.includes('24 hours')) hoursHint = 'Open 24 hours';
+                else {
+                    const closesMatch = statusText.match(/Closes\s+(.+?)(?:\s*·|$)/);
+                    if (closesMatch) hoursHint = 'Closes ' + closesMatch[1].trim();
+                    const opensMatch = statusText.match(/Opens\s+(.+?)(?:\s*·|$)/);
+                    if (opensMatch) hoursHint = 'Opens ' + opensMatch[1].trim();
                 }
             }
 
-            // Open/Closed status
-            const statusEl = card.querySelector('.ZDu9vd, .eXlrNe');
-            const isOpen = statusEl ? !statusEl.textContent?.toLowerCase().includes('closed') : null;
+            // Phone — from .UsdlK span (most reliable)
+            const phoneEl = card.querySelector('.UsdlK');
+            phone = phoneEl?.textContent?.trim() || null;
 
-            // Website URL — from the card's website link button
+            // Full address — combine what we have
+            fullAddress = address;
+
+            // Clean address — remove leading dots, commas, spaces
+            if (fullAddress) {
+                fullAddress = fullAddress.replace(/^[·,\s]+/, '').trim();
+            }
+
+            // Postal code — try to find 6-digit Indian pincode in address only (not phone)
+            let postalCode = null;
+            if (fullAddress) {
+                const pincodeMatch = fullAddress.match(/\b(\d{6})\b/) || fullAddress.match(/\b(\d{5})\b/);
+                if (pincodeMatch) postalCode = pincodeMatch[1];
+            }
+
+            // City — extract from searchQuery context
+            let city = null;
+            if (searchQueryStr) {
+                const cityMatch = searchQueryStr.match(/in\s+(.+)$/i);
+                if (cityMatch) {
+                    city = cityMatch[1].trim();
+                    // Clean up area suffix like "Banjara Hills Hyderabad" → use as-is
+                }
+            }
+
+            // Neighborhood — from address before any comma
+            let neighborhood = null;
+            if (address) {
+                const parts = address.split(',');
+                if (parts.length > 1) {
+                    neighborhood = parts[0].trim();
+                }
+            }
+
+            // Website
             const websiteEl = card.querySelector('a[data-value="Website"], a[href*="http"]:not([href*="google.com"])');
             const website = websiteEl?.href || null;
 
@@ -125,7 +188,10 @@ router.addHandler(LABELS.SEARCH_RESULTS, async ({ page, request, log, crawler, p
                 placeId: placeIdMatch ? placeIdMatch[0] : null,
                 featureId: fidMatch ? fidMatch[1] : null,
                 primaryCategory: category,
-                address,
+                address: fullAddress,
+                neighborhood,
+                city,
+                postalCode,
                 latitude: latMatch ? parseFloat(latMatch[1]) : null,
                 longitude: lngMatch ? parseFloat(lngMatch[1]) : null,
                 rating,
@@ -133,12 +199,13 @@ router.addHandler(LABELS.SEARCH_RESULTS, async ({ page, request, log, crawler, p
                 phone,
                 website,
                 googleMapsUrl: url,
-                isOpen,
+                isOpen: openStatus === 'Open' ? true : openStatus === 'Closed' ? false : null,
+                hoursHint,
             });
         }
 
         return results;
-    });
+    }, searchQuery);
 
     log.info(`Found ${cards.length} listings for "${searchQuery}"`);
 
