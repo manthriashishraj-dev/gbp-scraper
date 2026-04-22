@@ -36,6 +36,13 @@ export const CITY_TIER = {
 
   // Tier 3 — District/smaller cities
   karimnagar: 3, nizamabad: 3, khammam: 3, nalgonda: 3, mahbubnagar: 3,
+  // Telangana district HQs & towns
+  ramagundam: 3, siddipet: 3, adilabad: 3, mancherial: 3,
+  jagtial: 3, kothagudem: 3, mahbubabad: 3, bhadrachalam: 3,
+  zaheerabad: 3, medak: 3, vikarabad: 3, nagarkurnool: 3,
+  wanaparthy: 3, gadwal: 3, kamareddy: 3, nirmal: 3,
+  asifabad: 3, bhupalpally: 3, sircilla: 3, peddapalli: 3,
+  bhuvanagiri: 3, narayanpet: 3,
   medchal: 3, sangareddy: 3, suryapet: 3, miryalaguda: 3, bhongir: 3,
   nandyal: 3, adoni: 3, anantapur: 3, kadapa: 3, chittoor: 3,
   srikakulam: 3, vizianagaram: 3, eluru: 3, rajahmundry: 3, kakinada: 3,
@@ -1436,6 +1443,229 @@ export const CITY_AREAS = {
     'Kosgi Mahbubnagar', 'Nagarkurnool Mahbubnagar',
     'Shadnagar Mahbubnagar', 'Bhoothpur Mahbubnagar',
     'Balanagar Mahbubnagar', 'Farooqnagar Mahbubnagar',
+  ],
+
+  // ──────────────────────────────────────────────────────────────
+  //  TELANGANA — Additional district HQs & major towns
+  // ──────────────────────────────────────────────────────────────
+
+  ramagundam: [
+    'Ramagundam', 'Godavarikhani Ramagundam', 'Godavari Khani Ramagundam',
+    'NTPC Colony Ramagundam', 'FCI Colony Ramagundam',
+    'Basanth Nagar Ramagundam', 'Jyothi Nagar Ramagundam',
+    'Singareni Colony Ramagundam', 'Markandeya Colony Ramagundam',
+    'Gopalpur Ramagundam', 'Rampur Ramagundam',
+    'Yellandu Road Ramagundam', 'Dhoopalpalle Ramagundam',
+    'Ramagundam-3 Incline', 'NTPC Ramagundam',
+  ],
+
+  siddipet: [
+    'Siddipet', 'Gajwel Siddipet', 'Husnabad Siddipet',
+    'Dubbak Siddipet', 'Cherial Siddipet',
+    'Komuravelly Siddipet', 'Toguta Siddipet',
+    'Doulatabad Siddipet', 'Markook Siddipet',
+    'Chinnakodur Siddipet', 'Laxmipur Siddipet',
+    'Jogipet Road Siddipet', 'Bus Stand Siddipet',
+    'Narayanraopet Siddipet', 'Mulugu Siddipet',
+  ],
+
+  adilabad: [
+    'Adilabad', 'Bhainsa Adilabad', 'Utnoor Adilabad',
+    'Nirmal Adilabad', 'Ichoda Adilabad',
+    'Jainad Adilabad', 'Boath Adilabad',
+    'Sirpur Kagaznagar Adilabad', 'Kaghaznagar Adilabad',
+    'Asifabad Adilabad', 'Chennur Adilabad',
+    'Chanda Adilabad', 'Mancherial Road Adilabad',
+    'Mavala Adilabad', 'Talamadugu Adilabad',
+  ],
+
+  mancherial: [
+    'Mancherial', 'Bellampalli Mancherial', 'Chennur Mancherial',
+    'Mandamarri Mancherial', 'Kasipet Mancherial',
+    'Jaipur Mancherial', 'Luxettipet Mancherial',
+    'Mandamarri Colony Mancherial', 'Singareni Mancherial',
+    'Karimnagar Road Mancherial', 'Naspur Mancherial',
+    'Hajipur Mancherial', 'Kothapalli Mancherial',
+    'Dandepally Mancherial', 'Bheemini Mancherial',
+  ],
+
+  suryapet: [
+    'Suryapet', 'Kodad Suryapet', 'Thirumalagiri Suryapet',
+    'Atmakur Suryapet', 'Munugode Suryapet',
+    'Huzurnagar Suryapet', 'Mattampally Suryapet',
+    'Mothkur Suryapet', 'Chiwemla Suryapet',
+    'Ananthagiri Suryapet', 'Bus Stand Suryapet',
+    'Nuthankal Suryapet', 'Kurmaidda Suryapet',
+    'Penpahad Suryapet', 'Neredcherla Suryapet',
+  ],
+
+  miryalaguda: [
+    'Miryalaguda', 'Garidepally Miryalaguda', 'Nereducharla Miryalaguda',
+    'Chandanagar Miryalaguda', 'Anumula Miryalaguda',
+    'Hyderabad Road Miryalaguda', 'Nalgonda Road Miryalaguda',
+    'Bus Stand Miryalaguda', 'Damaracherla Miryalaguda',
+    'Tripuraram Miryalaguda', 'Vemulapally Miryalaguda',
+    'Adavidevulapally Miryalaguda',
+  ],
+
+  jagtial: [
+    'Jagtial', 'Metpally Jagtial', 'Korutla Jagtial',
+    'Raikal Jagtial', 'Dharmapuri Jagtial',
+    'Kathlapur Jagtial', 'Sultanabad Jagtial',
+    'Mallial Jagtial', 'Peddapur Jagtial',
+    'Bus Stand Jagtial', 'Ibrahimpatnam Jagtial',
+    'Mallapur Jagtial',
+  ],
+
+  kothagudem: [
+    'Kothagudem', 'Yellandu Kothagudem', 'Sathupalli Kothagudem',
+    'Palwancha Kothagudem', 'Palvancha Kothagudem',
+    'Bhadrachalam Road Kothagudem', 'KTPS Colony Kothagudem',
+    'Singareni Colony Kothagudem', 'Manuguru Kothagudem',
+    'Pinapaka Kothagudem', 'Aswaraopeta Kothagudem',
+    'Laxmidevipally Kothagudem',
+  ],
+
+  mahbubabad: [
+    'Mahbubabad', 'Thorrur Mahbubabad', 'Dornakal Mahbubabad',
+    'Garla Mahbubabad', 'Maripeda Mahbubabad',
+    'Kesamudram Mahbubabad', 'Bayyaram Mahbubabad',
+    'Kuravi Mahbubabad', 'Danthalapalli Mahbubabad',
+    'Nellikudur Mahbubabad',
+  ],
+
+  bhadrachalam: [
+    'Bhadrachalam', 'Ashwaraopeta Bhadrachalam', 'Charla Bhadrachalam',
+    'Dummugudem Bhadrachalam', 'Pinapaka Bhadrachalam',
+    'Kunavaram Bhadrachalam', 'Venkatapuram Bhadrachalam',
+    'Cherla Bhadrachalam', 'Manuguru Bhadrachalam',
+    'Sarapaka Bhadrachalam', 'Wazeed Bhadrachalam',
+  ],
+
+  zaheerabad: [
+    'Zaheerabad', 'Jharasangam Zaheerabad', 'Nyalkal Zaheerabad',
+    'Raikode Zaheerabad', 'Narayankhed Zaheerabad',
+    'Kohir Zaheerabad', 'Sadasivpet Zaheerabad',
+    'Manoor Zaheerabad', 'Kangti Zaheerabad',
+    'Mogdumpur Zaheerabad',
+  ],
+
+  sangareddy: [
+    'Sangareddy', 'Patancheru Sangareddy', 'Ramachandrapuram Sangareddy',
+    'Andole Sangareddy', 'Jogipet Sangareddy',
+    'Pulkal Sangareddy', 'Hathnoora Sangareddy',
+    'Munpalle Sangareddy', 'Zaheerabad Road Sangareddy',
+    'BHEL Ramachandrapuram Sangareddy', 'Isnapur Sangareddy',
+    'Kandi Sangareddy', 'Narsapur Sangareddy',
+    'Gummadidala Sangareddy', 'Jinnaram Sangareddy',
+  ],
+
+  medak: [
+    'Medak', 'Narsapur Medak', 'Toopran Medak',
+    'Ramayampet Medak', 'Shivampet Medak',
+    'Papannapet Medak', 'Alladurg Medak',
+    'Kowdipally Medak', 'Chegunta Medak',
+    'Narayankhed Medak', 'Nizamabad Road Medak',
+    'Tekmal Medak', 'Kulcharam Medak',
+  ],
+
+  vikarabad: [
+    'Vikarabad', 'Tandur Vikarabad', 'Pargi Vikarabad',
+    'Kodangal Vikarabad', 'Mominpet Vikarabad',
+    'Dharur Vikarabad', 'Parigi Vikarabad',
+    'Doma Vikarabad', 'Anantharam Vikarabad',
+    'Basheerabad Vikarabad', 'Marpalle Vikarabad',
+  ],
+
+  nagarkurnool: [
+    'Nagarkurnool', 'Achampet Nagarkurnool', 'Kalwakurthy Nagarkurnool',
+    'Kollapur Nagarkurnool', 'Bhootpur Nagarkurnool',
+    'Amrabad Nagarkurnool', 'Lingal Nagarkurnool',
+    'Kodair Nagarkurnool', 'Telkapally Nagarkurnool',
+    'Uppununthala Nagarkurnool',
+  ],
+
+  wanaparthy: [
+    'Wanaparthy', 'Pebbair Wanaparthy', 'Amangal Wanaparthy',
+    'Kothakota Wanaparthy', 'Madanapur Wanaparthy',
+    'Gopalpet Wanaparthy', 'Weepangandla Wanaparthy',
+    'Dharur Wanaparthy', 'Atmakur Wanaparthy',
+    'Peddamandadi Wanaparthy',
+  ],
+
+  gadwal: [
+    'Gadwal', 'Alampur Gadwal', 'Aiza Gadwal',
+    'Ieeja Gadwal', 'Manopad Gadwal',
+    'Dharur Gadwal', 'Waddepally Gadwal',
+    'Gattu Gadwal', 'Jogulamba Gadwal',
+    'Maldakal Gadwal',
+  ],
+
+  kamareddy: [
+    'Kamareddy', 'Banswada Kamareddy', 'Yellareddy Kamareddy',
+    'Bichkunda Kamareddy', 'Nizamsagar Kamareddy',
+    'Birkur Kamareddy', 'Jukkal Kamareddy',
+    'Pitlam Kamareddy', 'Lingampet Kamareddy',
+    'Gandhari Kamareddy', 'Bhiknoor Kamareddy',
+    'Domakonda Kamareddy',
+  ],
+
+  nirmal: [
+    'Nirmal', 'Basar Nirmal', 'Khanapur Nirmal',
+    'Dilawarpur Nirmal', 'Laxmanchanda Nirmal',
+    'Sarangapur Nirmal', 'Tanoor Nirmal',
+    'Mudhole Nirmal', 'Kaddam Nirmal',
+    'Kubeer Nirmal', 'Soan Nirmal',
+    'Mamda Nirmal',
+  ],
+
+  asifabad: [
+    'Asifabad', 'Kagaznagar Asifabad', 'Sirpur Kagaznagar Asifabad',
+    'Bejjur Asifabad', 'Kerameri Asifabad',
+    'Lingapur Asifabad', 'Kouthala Asifabad',
+    'Chintalamanepalli Asifabad', 'Tiryani Asifabad',
+    'Rebbena Asifabad', 'Penchikalpet Asifabad',
+  ],
+
+  bhupalpally: [
+    'Bhupalpally', 'Parkal Bhupalpally', 'Regonda Bhupalpally',
+    'Mahadevpur Bhupalpally', 'Chityal Bhupalpally',
+    'Mogullapalli Bhupalpally', 'Malhar Rao Bhupalpally',
+    'Etunagaram Bhupalpally', 'Mutharam Bhupalpally',
+    'Kataram Bhupalpally', 'Ghanpur Bhupalpally',
+  ],
+
+  sircilla: [
+    'Sircilla', 'Vemulawada Sircilla', 'Thangallapalli Sircilla',
+    'Ellanthakunta Sircilla', 'Mustabad Sircilla',
+    'Gambhiraopet Sircilla', 'Konaraopet Sircilla',
+    'Yellareddy Peta Sircilla', 'Boinpalli Sircilla',
+    'Rudrangi Sircilla', 'Illanthakunta Sircilla',
+  ],
+
+  peddapalli: [
+    'Peddapalli', 'Manthani Peddapalli', 'Sultanabad Peddapalli',
+    'Ramagundam Peddapalli', 'Dharmaram Peddapalli',
+    'Elkathurthy Peddapalli', 'Kamanpur Peddapalli',
+    'Mutharam Peddapalli', 'Julapalli Peddapalli',
+    'Odela Peddapalli', 'Palakurthi Peddapalli',
+    'Srirampur Peddapalli',
+  ],
+
+  bhuvanagiri: [
+    'Bhuvanagiri', 'Bhongir', 'Yadagirigutta Bhuvanagiri',
+    'Alair Bhuvanagiri', 'Motakonduru Bhuvanagiri',
+    'Bommalaramaram Bhuvanagiri', 'Pochampally Bhuvanagiri',
+    'Choutuppal Bhuvanagiri', 'Narketpally Bhuvanagiri',
+    'Turkapally Bhuvanagiri', 'Valigonda Bhuvanagiri',
+  ],
+
+  narayanpet: [
+    'Narayanpet', 'Makthal Narayanpet', 'Maganoor Narayanpet',
+    'Damaragidda Narayanpet', 'Utkoor Narayanpet',
+    'Krishna Narayanpet', 'Maddur Narayanpet',
+    'Kosgi Narayanpet', 'Narva Narayanpet',
+    'Dhanwada Narayanpet',
   ],
 
   // Andhra Pradesh — Tier 3
