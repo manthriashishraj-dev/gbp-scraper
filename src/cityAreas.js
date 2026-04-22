@@ -498,20 +498,42 @@ export const CITY_AREAS = {
   //  TIER 3 — DISTRICT / SMALLER CITIES (Telangana & AP focus)
   // ──────────────────────────────────────────────────────────────
 
-  // WARANGAL (Telangana — includes merged corporations)
+  // WARANGAL (Telangana — includes merged corporations + rural mandals)
   warangal: [
-    'Warangal', 'Hanamkonda', 'Kazipet',
+    // Core city
+    'Warangal', 'Hanamkonda', 'Hanmakonda', 'Kazipet',
     'Subedari Warangal', 'Naimnagar Warangal',
+    'Lashkar Bazar Warangal', 'Desaipet Warangal',
+    'Khila Warangal', 'Fort Warangal',
+    'Kishanpura Warangal', 'Nakkalagutta Warangal',
+    'Matwada Warangal', 'BAS Colony Warangal',
+    'Mulug Road Warangal', 'Shyampet Warangal',
+    'Ramnagar Warangal', 'Mamnoor Warangal',
+    'Hunter Road Warangal', 'Station Road Warangal',
+    'NIT Warangal', 'KU Campus Warangal',
+    'Kakatiya University Warangal', 'Balasamudram Warangal',
+    'Chintagattu Warangal', 'Gorrekunta Warangal',
+    'Madikonda Warangal', 'Enamamula Warangal',
+    'Waddepally Warangal', 'Mucherla Warangal',
+    'Warasiguda Warangal', 'Stambampally Warangal',
+    // Hanamkonda localities
+    'Kakaji Colony Hanamkonda', 'Vidyaranyapuri Hanamkonda',
+    'Lakshmipuram Hanamkonda', 'Excise Colony Hanamkonda',
+    'Industrial Estate Hanamkonda',
+    // Hasanparthy / Bheemaram / merged areas
     'Hasanparthy Warangal', 'Bheemaram Warangal',
-    'Dharmasagar Warangal', 'Lashkar Bazar Warangal',
-    'Desaipet Warangal', 'Khila Warangal',
-    'Shyampet Warangal', 'Ramnagar Warangal',
-    'Mamnoor Warangal', 'Mulug Road Warangal',
-    'Nallabelly Warangal', 'BAS Colony Warangal',
-    'Fort Warangal', 'Kishanpura Warangal',
-    'Nakkalagutta Warangal', 'Hanmakonda',
+    'Dharmasagar Warangal', 'Venkatapur Warangal',
+    'Kothawada Warangal', 'Geesugonda Warangal',
+    'Paikagudem Warangal', 'Atmakur Warangal',
+    // Rural / district
     'Elkathurthy Warangal', 'Nekkonda Warangal',
-    'Zafargadh Warangal', 'Matwada Warangal',
+    'Zafargadh Warangal', 'Nallabelly Warangal',
+    'Parvathagiri Warangal', 'Parkal Warangal',
+    'Wardhannapet Warangal', 'Station Ghanpur Warangal',
+    'Narsampet Warangal', 'Mulugu Warangal',
+    'Jangaon Warangal', 'Mahabubabad Warangal',
+    'Thorrur Warangal', 'Maripeda Warangal',
+    'Ghanpur Warangal', 'Raghunathpalle Warangal',
   ],
 
   karimnagar: [
