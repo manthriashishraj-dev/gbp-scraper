@@ -136,11 +136,10 @@ const crawler = new PuppeteerCrawler({
     requestHandlerTimeoutSecs: REQUEST_HANDLER_TIMEOUT / 1000,
 
     preNavigationHooks: [
-        async ({ page }) => {
+        async ({ page, request }) => {
             // CDP patch: hide navigator.webdriver on every new page
             await page.evaluateOnNewDocument(() => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                // Also hide Chrome automation indicators
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 window.chrome = { runtime: {} };
@@ -151,6 +150,69 @@ const crawler = new PuppeteerCrawler({
             await page.setExtraHTTPHeaders({
                 'Accept-Language': `${language},en;q=0.9`,
             });
+
+            // ========== COST OPTIMIZATION: Block heavy resources ==========
+            // Google Maps loads ~5-10 MB per page (images, map tiles, fonts, ads).
+            // We don't need any of those — only HTML + JS for the data extraction.
+            // Blocking saves ~70-80% of proxy bandwidth which is the main cost.
+            //
+            // For deep mode (PLACE_DETAIL), we DO need photo URLs from the page,
+            // so we keep `image` requests but block them at runtime AFTER we've
+            // already extracted URLs from the rendered DOM/API. For SEARCH_RESULTS
+            // we're aggressive — block everything heavy.
+            const isQuickMode = request.userData?.scrapeMode === 'quick' || request.label === 'SEARCH_RESULTS';
+
+            if (!page._gbpInterceptionSet) {
+                page._gbpInterceptionSet = true;
+                await page.setRequestInterception(true);
+                page.on('request', (req) => {
+                    const type = req.resourceType();
+                    const url = req.url();
+
+                    // Always block: ads, analytics, fonts, media, websockets, manifest
+                    if (
+                        type === 'font' ||
+                        type === 'media' ||
+                        type === 'manifest' ||
+                        type === 'websocket' ||
+                        type === 'eventsource' ||
+                        url.includes('doubleclick.net') ||
+                        url.includes('googletagmanager.com') ||
+                        url.includes('google-analytics.com') ||
+                        url.includes('googleadservices.com') ||
+                        url.includes('googlesyndication.com') ||
+                        url.includes('adservice.google') ||
+                        url.includes('beacon.gstatic.com') ||
+                        url.includes('/maps/vt/')   // Google Maps map tiles — huge bandwidth, not needed
+                    ) {
+                        req.abort();
+                        return;
+                    }
+
+                    // For QUICK mode (search results): block all images
+                    // Keep stylesheets (some selectors depend on CSS-rendered state).
+                    if (isQuickMode) {
+                        if (type === 'image') {
+                            req.abort();
+                            return;
+                        }
+                    } else {
+                        // For DEEP mode: block large image content but allow tiny thumbnails
+                        // (we need photo URLs from img.src). Don't block stylesheets — review
+                        // dropdown menus need them to detect open/closed state.
+                        if (type === 'image' && url.includes('googleusercontent.com')) {
+                            // Allow loading photo URLs (small thumbnails) — they appear in DOM
+                            // but block large profile photos that come in via /=w800-h600
+                            if (url.match(/=w[5-9]\d{2,}/) || url.match(/=s[5-9]\d{2,}/)) {
+                                req.abort();
+                                return;
+                            }
+                        }
+                    }
+
+                    req.continue();
+                });
+            }
         },
     ],
 
