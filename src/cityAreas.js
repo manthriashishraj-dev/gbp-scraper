@@ -286,7 +286,7 @@ export const CITY_AREAS = {
     'Langar Houz Hyderabad', 'Tattiannaram Hyderabad',
     'Moinabad Hyderabad', 'Chevella Hyderabad',
     // Additional tech corridor / outer ring
-    'Kollur Hyderabad', 'Tellapur Hyderabad',
+    'Kollur Hyderabad',
     'Mokila Hyderabad', 'ISB Hyderabad',
     'DLF Hyderabad', 'Knowledge City Hyderabad',
     'Cyber Towers Hyderabad', 'Raidurg Hyderabad',

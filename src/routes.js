@@ -250,13 +250,14 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
 
     // ===== STEP 1: Intercept the /maps/preview/place API response =====
     let apiResponseText = null;
-    page.on('response', async (response) => {
+    const placeResponseHandler = async (response) => {
         if (response.url().includes('preview/place')) {
             try {
                 apiResponseText = await response.text();
             } catch { /* response body not available */ }
         }
-    });
+    };
+    page.on('response', placeResponseHandler);
 
     // ===== STEP 1a: Pre-warm cookies for direct profile URLs =====
     // When called with placeUrls (direct profile URL) instead of from a search,
@@ -375,6 +376,10 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
             business.longitude = parseFloat(urlCoordMatch[2]);
         }
     }
+
+    // Remove the preview/place response listener — we have what we need.
+    // Subsequent navigations (KP, photos, contributor page) shouldn't be captured.
+    try { page.off('response', placeResponseHandler); } catch { /* ignore */ }
 
     if (!business?.name) {
         log.error('No business data extracted — page may not have loaded');
@@ -605,16 +610,21 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                 const result = { aiSummary: null, peopleMention: [] };
 
                 // AI Review Summary — Google generates a paragraph summarizing all reviews
-                // Usually in a div near "Review summary" heading
                 const summaryEl = document.querySelector('.fontBodyMedium .PbZDve, .review-summary, [data-attrid*="review_summary"]');
                 if (summaryEl) {
                     result.aiSummary = summaryEl.textContent?.trim()?.substring(0, 500) || null;
                 }
 
-                // People mention keywords — shown as chips like "treatment (14)", "doctor (7)"
-                document.querySelectorAll('.KNfEk .uEubGf, .e2moi, button.GCxVpd').forEach(chip => {
+                // People mention keywords — chips with format "keyword (N)" e.g. "treatment (14)"
+                // Must MATCH this pattern to avoid contamination from Maps nav buttons
+                // ("Restaurants", "Hotels", "Things to do", "Transit", "Parking", etc.)
+                const NAV_BUTTONS = new Set(['Restaurants','Hotels','Things to do','Transit','Parking','Pharmacies','ATMs','Gas','Coffee','Groceries','Banks','Hospitals','Saved','Recents','Map','Satellite','Layers']);
+                document.querySelectorAll('.KNfEk .uEubGf, .e2moi').forEach(chip => {
                     const text = chip.textContent?.trim();
-                    if (text && text.length > 1 && text.length < 50) {
+                    if (!text || text.length < 2 || text.length > 50) return;
+                    if (NAV_BUTTONS.has(text)) return;
+                    // Real chips have format "keyword (count)" or just "keyword count"
+                    if (text.match(/^[a-z\s]+\s*\(?\d+\)?$/i) || text.match(/^[a-z][a-z\s]+$/i)) {
                         result.peopleMention.push(text);
                     }
                 });
@@ -675,6 +685,18 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
 
     // ===== STEP 3b3: Load ALL posts via localposts API scroll =====
     if (deepScrape && business.posts && business.posts.length > 0) {
+        // Intercept localposts API (declared outside try so finally can clean up)
+        const localPostTexts = [];
+        const localPostHandler = async (resp) => {
+            if (resp.url().includes('preview/localposts')) {
+                try {
+                    const t = await resp.text();
+                    if (t.length > 500) localPostTexts.push(t);
+                } catch {}
+            }
+        };
+        page.on('response', localPostHandler);
+
         try {
             // Scroll overview to find posts section
             for (let i = 0; i < 20; i++) {
@@ -684,18 +706,6 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
                 });
                 await sleep(200);
             }
-
-            // Intercept localposts API
-            const localPostTexts = [];
-            const localPostHandler = async (resp) => {
-                if (resp.url().includes('preview/localposts')) {
-                    try {
-                        const t = await resp.text();
-                        if (t.length > 500) localPostTexts.push(t);
-                    } catch {}
-                }
-            };
-            page.on('response', localPostHandler);
 
             // Click "See local posts" to open detail + trigger first API call
             await page.evaluate(() => {
@@ -771,9 +781,10 @@ router.addHandler(LABELS.PLACE_DETAIL, async ({ page, request, log, pushData }) 
             });
             await sleep(500);
 
-            page.off('response', localPostHandler);
         } catch (err) {
             log.warning(`Post scroll extraction: ${err.message}`);
+        } finally {
+            try { page.off('response', localPostHandler); } catch { /* ignore */ }
         }
     }
 

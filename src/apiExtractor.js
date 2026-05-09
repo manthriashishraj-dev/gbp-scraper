@@ -727,7 +727,7 @@ export function extractPhotoMetaFromApi(placeData) {
 
     const d = placeData[6];
     const result = {
-        totalCount: safeGet(d, 37, 1) || null,
+        totalCount: safeGet(d, 37, 1) ?? null,
         uploadDates: [],
         uploadFrequency: null,
     };
@@ -1036,12 +1036,12 @@ export function extractPeopleAlsoSearchFromApi(placeData) {
 
             // Parse the business data
             const name = data[11] || null;
-            const rating = safeGet(data, 4, 7) || null;
-            const reviewCount = safeGet(data, 4, 8) || null;
+            const rating = safeGet(data, 4, 7) ?? null;
+            const reviewCount = safeGet(data, 4, 8) ?? null;
             const catArray = data[13];
             const category = Array.isArray(catArray) ? catArray[0] : (typeof catArray === 'string' ? catArray : null);
-            const lat = safeGet(data, 9, 2) || null;
-            const lng = safeGet(data, 9, 3) || null;
+            const lat = safeGet(data, 9, 2) ?? null;
+            const lng = safeGet(data, 9, 3) ?? null;
 
             if (name || fid) {
                 results.push({
@@ -1129,7 +1129,7 @@ export function extractServicesFromApi(placeData) {
 export function extractMentionKeywordsFromReviews(reviews) {
     if (!Array.isArray(reviews) || reviews.length === 0) return [];
 
-    const stopWords = new Set(['the','a','an','is','was','were','are','am','be','been','being','have','has','had','do','does','did','will','would','shall','should','may','might','must','can','could','i','me','my','we','our','you','your','he','she','it','they','them','their','this','that','these','those','and','but','or','nor','for','so','yet','in','on','at','to','from','with','by','of','as','into','through','during','before','after','above','below','between','out','off','over','under','again','further','then','once','here','there','when','where','why','how','all','both','each','few','more','most','other','some','such','no','not','only','own','same','than','too','very','just','about','also','up','down','if','which','who','whom','what','its','like','got','get','go','going','went','went','one','two','good','great','very','really','much','well','best','even','every','back','make','made','many','time','first','new','now','way','right','still','know','take','come','could','would','give','use','need','find','tell','ask','work','seem','feel','try','leave','call','keep','long','let','begin','high','last','never','next','old','small','large','also','think','see','look','want','day','most']);
+    const stopWords = new Set(['the','a','an','is','was','were','are','am','be','been','being','have','has','had','do','does','did','will','would','shall','should','may','might','must','can','could','i','me','my','we','our','you','your','he','she','it','they','them','their','this','that','these','those','and','but','or','nor','for','so','yet','in','on','at','to','from','with','by','of','as','into','through','during','before','after','above','below','between','out','off','over','under','again','further','then','once','here','there','when','where','why','how','all','both','each','few','more','most','other','some','such','no','not','only','own','same','than','too','very','just','about','also','up','down','if','which','who','whom','what','its','like','got','get','go','going','went','one','two','good','great','very','really','much','well','best','even','every','back','make','made','many','time','first','new','now','way','right','still','know','take','come','could','would','give','use','need','find','tell','ask','work','seem','feel','try','leave','call','keep','long','let','begin','high','last','never','next','old','small','large','also','think','see','look','want','day','most']);
 
     const wordCount = {};
     for (const review of reviews) {

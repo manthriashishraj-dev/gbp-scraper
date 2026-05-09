@@ -1603,14 +1603,6 @@ export async function extractFullKnowledgePanel(page, log, businessName) {
             await sleep(2500);
         }
 
-        // Debug: save screenshot of search results to see what Google shows
-        try {
-            const { Actor } = await import('apify');
-            const screenshot = await page.screenshot({ fullPage: false, type: 'png' });
-            await Actor.setValue('DEBUG_KP_SEARCH_RESULT', screenshot, { contentType: 'image/png' });
-            log.info('Saved KP search screenshot as DEBUG_KP_SEARCH_RESULT');
-        } catch {}
-
         // Step 1: Click "More" / "Show more" on description to get full text
         await page.evaluate(() => {
             const btns = document.querySelectorAll('[data-attrid="kc:/local:merchant_description"] button, [data-attrid="kc:/local:merchant_description"] [role="button"]');
